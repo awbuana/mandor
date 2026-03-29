@@ -76,6 +76,8 @@ export function CenterPanel() {
     addAgentMessage,
     setAgentIsSending,
     setAgentStreamingContent,
+    setAgentSelectedModel,
+    fetchAgentModels,
   } = useAppStore()
 
   const [activeTab, setActiveTab] = useState<string>('codex')
@@ -103,16 +105,36 @@ export function CenterPanel() {
   // Get worktree session (includes files and agent messages)
   const worktreeSession = selectedWorktree
     ? getWorktreeSession(selectedWorktree.path)
-    : { files: { openFiles: [], activeFile: null }, agent: { messages: [], isSending: false, streamingContent: '', opencodeSession: undefined } }
+    : { files: { openFiles: [], activeFile: null }, agent: { messages: [], isSending: false, streamingContent: '', selectedModel: undefined, availableProviders: [], opencodeSession: undefined } }
   const { openFiles, activeFile } = worktreeSession.files
 
   // Get agent state for selected worktree
   const agentMessages = worktreeSession.agent.messages
   const isSending = worktreeSession.agent.isSending
   const streamingContent = worktreeSession.agent.streamingContent
+  const selectedModel = worktreeSession.agent.selectedModel
+  const availableProviders = worktreeSession.agent.availableProviders
+
+  // Parse selected model to get provider ID
+  const selectedProviderId = selectedModel?.split('/')[0] || ''
 
   // Note: Streaming is disabled for now - using synchronous responses instead
   // Each worktree has its own isSending state in the store
+
+  // Fetch available models when server starts
+  useEffect(() => {
+    if (currentServer?.isRunning && selectedWorktree && availableProviders.length === 0) {
+      console.log('Fetching providers for worktree:', selectedWorktree.path)
+      fetchAgentModels(selectedWorktree.path)
+    }
+  }, [currentServer?.isRunning, selectedWorktree?.path, availableProviders.length])
+
+  // Debug logging for providers
+  useEffect(() => {
+    console.log('Available providers:', availableProviders)
+    console.log('Selected model:', selectedModel)
+    console.log('Selected provider ID:', selectedProviderId)
+  }, [availableProviders, selectedModel, selectedProviderId])
 
   // Parse diff from string
   const parseDiff = (diff: string): DiffLine[] => {
@@ -247,13 +269,20 @@ export function CenterPanel() {
     try {
       console.log('Sending message to session:', currentServer.sessionId)
       console.log('Server:', currentServer.hostname, currentServer.port)
+      console.log('Selected model:', selectedModel)
+      
+      // Extract provider and model IDs from "providerId/modelId" format
+      const [providerId, modelId] = selectedModel ? selectedModel.split('/') : ['', '']
+      console.log('Using provider ID:', providerId, 'model ID:', modelId)
       
       // Send message and wait for response (synchronous)
       const response = await invoke('send_opencode_message', {
         hostname: currentServer.hostname,
         port: currentServer.port,
         sessionId: currentServer.sessionId,
-        message: userMessage.content
+        message: userMessage.content,
+        providerId: providerId || undefined,
+        modelId: modelId || undefined
       }) as { info: { id: string, role: string }, parts: Array<{ type: string, text?: string }> }
 
       console.log('Received response:', response)
@@ -618,7 +647,68 @@ export function CenterPanel() {
 
       {/* Bottom Panel - Command Input */}
       {activeView === 'console' && selectedWorktree && currentServer?.isRunning && (
-        <div className="border-t border-[#1a1a1a] p-4">
+        <div className="border-t border-[#1a1a1a] p-4 space-y-3">
+          {/* Provider & Model Selectors */}
+          {availableProviders.length > 0 ? (
+            <div className="flex items-center gap-4">
+              {/* Provider Dropdown */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-[#6b6b6b]">Provider:</span>
+                <select
+                  value={selectedProviderId || ''}
+                  onChange={(e) => {
+                    const providerId = e.target.value
+                    if (providerId && selectedWorktree) {
+                      // Get first model from selected provider
+                      const provider = availableProviders.find(p => p.id === providerId)
+                      const firstModelKey = provider ? Object.keys(provider.models)[0] : ''
+                      if (firstModelKey) {
+                        setAgentSelectedModel(selectedWorktree.path, `${providerId}/${firstModelKey}`)
+                      }
+                    }
+                  }}
+                  className="bg-[#1a1a1a] text-[#e0e0e0] text-xs px-3 py-1.5 rounded border border-[#2a2a2a] focus:border-[#d97757] outline-none"
+                >
+                  <option value="">Select provider...</option>
+                  {availableProviders.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Model Dropdown */}
+              {selectedProviderId && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[#6b6b6b]">Model:</span>
+                  <select
+                    value={selectedModel || ''}
+                    onChange={(e) => {
+                      if (selectedWorktree) {
+                        setAgentSelectedModel(selectedWorktree.path, e.target.value || undefined)
+                      }
+                    }}
+                    className="bg-[#1a1a1a] text-[#e0e0e0] text-xs px-3 py-1.5 rounded border border-[#2a2a2a] focus:border-[#d97757] outline-none"
+                  >
+                    {selectedProviderId && availableProviders
+                      .find(p => p.id === selectedProviderId)
+                      ?.models && Object.entries(
+                        availableProviders.find(p => p.id === selectedProviderId)!.models
+                      ).map(([modelId, model]) => (
+                        <option key={modelId} value={`${selectedProviderId}/${modelId}`}>
+                          {model.name || modelId}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-xs text-[#6b6b6b]">
+              No providers available. Check console for errors.
+            </div>
+          )}
           <form onSubmit={handleSubmitCommand} className="relative">
             <div className="flex items-center gap-2 px-4 py-3 bg-[#111111] border border-[#1a1a1a] rounded-lg focus-within:border-[#2a2a2a]">
               <span className="text-[#6b6b6b]">›</span>

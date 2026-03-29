@@ -29,6 +29,14 @@ export interface WorktreeSession {
     messages: AgentMessage[];
     isSending: boolean;
     streamingContent: string;
+    // Selected model for this worktree's agent (format: "providerId/modelId")
+    selectedModel?: string;
+    // Available providers with their models
+    availableProviders: Array<{
+      id: string;
+      name: string;
+      models: Record<string, { id: string; name: string }>;
+    }>;
     // Opencode session info scoped to this worktree
     opencodeSession?: {
       sessionId: string;
@@ -94,6 +102,9 @@ interface AppState {
   setAgentIsSending: (worktreePath: string, isSending: boolean) => void;
   setAgentStreamingContent: (worktreePath: string, content: string) => void;
   appendAgentStreamingContent: (worktreePath: string, content: string) => void;
+  setAgentSelectedModel: (worktreePath: string, model: string | undefined) => void;
+  setAgentAvailableProviders: (worktreePath: string, providers: Array<{ id: string; name: string; models: Record<string, { id: string; name: string }> }>) => void;
+  fetchAgentModels: (worktreePath: string) => Promise<void>;
 
   // Opencode Server Actions
   getOpencodeServer: (worktreePath: string) => OpencodeServerInstance | undefined;
@@ -115,6 +126,8 @@ const createDefaultSession = (): WorktreeSession => ({
     messages: [],
     isSending: false,
     streamingContent: '',
+    selectedModel: undefined,
+    availableProviders: [],
     opencodeSession: undefined,
   },
 });
@@ -342,6 +355,86 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     };
   }),
+
+  setAgentSelectedModel: (worktreePath: string, model: string | undefined) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            selectedModel: model,
+          }
+        }
+      }
+    };
+  }),
+
+  setAgentAvailableProviders: (worktreePath: string, providers: Array<{ id: string; name: string; models: Record<string, { id: string; name: string }> }>) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            availableProviders: providers,
+          }
+        }
+      }
+    };
+  }),
+
+  fetchAgentModels: async (worktreePath: string) => {
+    const server = get().opencodeServers[worktreePath];
+    if (!server?.isRunning || !server.port) {
+      return;
+    }
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke('get_opencode_providers', {
+        hostname: server.hostname,
+        port: server.port,
+      }) as { 
+        all: Array<{ 
+          id: string; 
+          name: string;
+          models: Record<string, { id: string; name: string }>;
+        }>;
+        connected: string[];
+      };
+
+      console.log('Providers response:', result);
+
+      // Filter to only connected providers
+      const connectedProviders = result.all?.filter((provider: { id: string }) => 
+        result.connected?.includes(provider.id)
+      ) || [];
+
+      console.log('Connected providers:', connectedProviders);
+
+      // Update available providers
+      get().setAgentAvailableProviders(worktreePath, connectedProviders);
+      
+      // Set default model if none selected (use first model from first provider)
+      const currentSession = get().worktreeSessions[worktreePath];
+      if (!currentSession?.agent.selectedModel && connectedProviders.length > 0) {
+        const firstProvider = connectedProviders[0];
+        const firstModelKey = Object.keys(firstProvider.models)[0];
+        if (firstModelKey) {
+          get().setAgentSelectedModel(worktreePath, `${firstProvider.id}/${firstModelKey}`);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch models:', error);
+    }
+  },
 
   // Opencode Server Actions
   getOpencodeServer: (worktreePath: string) => {

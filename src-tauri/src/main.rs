@@ -47,6 +47,7 @@ fn main() {
             opencode::stream_opencode_events,
             opencode::check_opencode_health,
             opencode::stop_opencode_server,
+            opencode::get_opencode_providers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
