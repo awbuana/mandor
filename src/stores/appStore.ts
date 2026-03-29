@@ -17,6 +17,9 @@ export interface AgentMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  messageId?: string;
+  partId?: string;
+  type?: string;
 }
 
 // Unified worktree session container - everything in CenterPanel is scoped here
@@ -29,6 +32,8 @@ export interface WorktreeSession {
     messages: AgentMessage[];
     isSending: boolean;
     streamingContent: string;
+    // Streaming messages tracked by messageID for SSE event handling
+    streamingMessages: Record<string, AgentMessage>;
     // Selected model for this worktree's agent (format: "providerId/modelId")
     selectedModel?: string;
     // Available providers with their models
@@ -105,6 +110,12 @@ interface AppState {
   setAgentSelectedModel: (worktreePath: string, model: string | undefined) => void;
   setAgentAvailableProviders: (worktreePath: string, providers: Array<{ id: string; name: string; models: Record<string, { id: string; name: string }> }>) => void;
   fetchAgentModels: (worktreePath: string) => Promise<void>;
+  // Streaming message actions (per worktree)
+  addStreamingMessage: (worktreePath: string, message: AgentMessage) => void;
+  updateStreamingMessage: (worktreePath: string, messageId: string, updates: Partial<AgentMessage>) => void;
+  appendStreamingMessageDelta: (worktreePath: string, messageId: string, delta: string) => void;
+  finalizeStreamingMessage: (worktreePath: string, messageId: string) => void;
+  clearStreamingMessages: (worktreePath: string) => void;
 
   // Opencode Server Actions
   getOpencodeServer: (worktreePath: string) => OpencodeServerInstance | undefined;
@@ -126,6 +137,7 @@ const createDefaultSession = (): WorktreeSession => ({
     messages: [],
     isSending: false,
     streamingContent: '',
+    streamingMessages: {},
     selectedModel: undefined,
     availableProviders: [],
     opencodeSession: undefined,
@@ -350,6 +362,115 @@ export const useAppStore = create<AppState>((set, get) => ({
           agent: {
             ...currentSession.agent,
             streamingContent: currentSession.agent.streamingContent + content,
+          }
+        }
+      }
+    };
+  }),
+
+  addStreamingMessage: (worktreePath: string, message: AgentMessage) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            streamingMessages: {
+              ...currentSession.agent.streamingMessages,
+              [message.messageId || message.id]: message,
+            },
+          }
+        }
+      }
+    };
+  }),
+
+  updateStreamingMessage: (worktreePath: string, messageId: string, updates: Partial<AgentMessage>) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+    const existingMessage = currentSession.agent.streamingMessages[messageId];
+
+    if (!existingMessage) return state;
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            streamingMessages: {
+              ...currentSession.agent.streamingMessages,
+              [messageId]: { ...existingMessage, ...updates },
+            },
+          }
+        }
+      }
+    };
+  }),
+
+  appendStreamingMessageDelta: (worktreePath: string, messageId: string, delta: string) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+    const existingMessage = currentSession.agent.streamingMessages[messageId];
+
+    if (!existingMessage) return state;
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            streamingMessages: {
+              ...currentSession.agent.streamingMessages,
+              [messageId]: { 
+                ...existingMessage, 
+                content: existingMessage.content + delta 
+              },
+            },
+          }
+        }
+      }
+    };
+  }),
+
+  finalizeStreamingMessage: (worktreePath: string, messageId: string) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+    const streamingMessage = currentSession.agent.streamingMessages[messageId];
+
+    if (!streamingMessage) return state;
+
+    const { [messageId]: _, ...remainingStreaming } = currentSession.agent.streamingMessages;
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            streamingMessages: remainingStreaming,
+            messages: [...currentSession.agent.messages, streamingMessage],
+          }
+        }
+      }
+    };
+  }),
+
+  clearStreamingMessages: (worktreePath: string) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            streamingMessages: {},
           }
         }
       }

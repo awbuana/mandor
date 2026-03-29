@@ -12,6 +12,7 @@ import {
 import { AgentType } from '@/types'
 import { useState, useRef, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen, UnlistenFn } from '@tauri-apps/api/event'
 
 
 type AgentTab = {
@@ -35,6 +36,9 @@ interface Message {
   content: string
   timestamp: Date
   isStreaming?: boolean
+  messageId?: string
+  partId?: string
+  type?: string
 }
 
 
@@ -78,6 +82,10 @@ export function CenterPanel() {
     setAgentStreamingContent,
     setAgentSelectedModel,
     fetchAgentModels,
+    addStreamingMessage,
+    appendStreamingMessageDelta,
+    finalizeStreamingMessage,
+    clearStreamingMessages,
   } = useAppStore()
 
   const [activeTab, setActiveTab] = useState<string>('codex')
@@ -105,13 +113,14 @@ export function CenterPanel() {
   // Get worktree session (includes files and agent messages)
   const worktreeSession = selectedWorktree
     ? getWorktreeSession(selectedWorktree.path)
-    : { files: { openFiles: [], activeFile: null }, agent: { messages: [], isSending: false, streamingContent: '', selectedModel: undefined, availableProviders: [], opencodeSession: undefined } }
+    : { files: { openFiles: [], activeFile: null }, agent: { messages: [], isSending: false, streamingContent: '', streamingMessages: {}, selectedModel: undefined, availableProviders: [], opencodeSession: undefined } }
   const { openFiles, activeFile } = worktreeSession.files
 
   // Get agent state for selected worktree
   const agentMessages = worktreeSession.agent.messages
   const isSending = worktreeSession.agent.isSending
   const streamingContent = worktreeSession.agent.streamingContent
+  const streamingMessages = worktreeSession.agent.streamingMessages
   const selectedModel = worktreeSession.agent.selectedModel
   const availableProviders = worktreeSession.agent.availableProviders
 
@@ -135,6 +144,229 @@ export function CenterPanel() {
     console.log('Selected model:', selectedModel)
     console.log('Selected provider ID:', selectedProviderId)
   }, [availableProviders, selectedModel, selectedProviderId])
+
+  // Start SSE stream when server starts
+  useEffect(() => {
+    if (!currentServer?.isRunning || !currentServer.sessionId || !selectedWorktree) {
+      return
+    }
+
+    let isStreamStarted = false
+
+    const startStream = async () => {
+      if (isStreamStarted) return
+      isStreamStarted = true
+
+      try {
+        console.log('Starting SSE stream for session:', currentServer.sessionId)
+        await invoke('stream_opencode_events', {
+          hostname: currentServer.hostname,
+          port: currentServer.port,
+          sessionId: currentServer.sessionId,
+        })
+        console.log('SSE stream started successfully')
+      } catch (error) {
+        console.error('Failed to start SSE stream:', error)
+        isStreamStarted = false
+      }
+    }
+
+    startStream()
+  }, [currentServer?.isRunning, currentServer?.sessionId, selectedWorktree?.path])
+
+  // Listen for SSE events
+  useEffect(() => {
+    if (!selectedWorktree) return
+
+    let unlisten: UnlistenFn | undefined
+    let finalizeTimeout: ReturnType<typeof setTimeout> | null = null
+    let inactivityTimeout: ReturnType<typeof setTimeout> | null = null
+    let lastMessageId: string | null = null
+
+    const setupListener = async () => {
+      unlisten = await listen<{
+        session_id: string
+        event: string
+        data: {
+          type?: string
+          properties?: {
+            sessionID?: string
+            messageID?: string
+            diff?: Array<unknown>
+            part?: {
+              id?: string
+              messageID?: string
+              sessionID?: string
+              type?: string
+              text?: string
+              time?: { start?: number } | number
+            }
+            field?: string
+            delta?: string
+          }
+        }
+      }>('opencode-event', (event) => {
+        const { event: eventType, data } = event.payload
+
+        console.log('[SSE Event] Raw:', JSON.stringify(event.payload, null, 2))
+        
+        const properties = data?.properties as Record<string, unknown> | undefined
+        console.log('[SSE Event]', eventType, 'properties:', JSON.stringify(properties, null, 2))
+
+        // Clear inactivity timeout on any event
+        if (inactivityTimeout) {
+          clearTimeout(inactivityTimeout)
+        }
+
+        // Cast data to any to handle flexible structure
+        const rawData = data as Record<string, unknown>
+        
+        // Extract properties - could be nested or flat depending on event
+        const part = (properties as Record<string, unknown>)?.part as Record<string, unknown> | undefined
+        const messageId = (part?.messageID as string) || (part?.messageId as string) || (part?.id as string) || (rawData?.messageID as string) || (rawData?.messageId as string)
+        const text = (part?.text as string) || (part?.content as string) || (rawData?.text as string) || (rawData?.content as string) || ''
+        const delta = (properties as Record<string, unknown>)?.delta as string || rawData?.delta as string
+        const msgType = (part?.type as string) || (rawData?.type as string) || 'text'
+
+        // Handle error events
+        if (eventType === 'error' || eventType === 'message.error') {
+          const errorMsg = (properties?.error as string) || (rawData?.error as string) || (rawData?.message as string) || 'Unknown error'
+          console.log('[SSE] Error event:', errorMsg)
+          
+          if (lastMessageId) {
+            finalizeStreamingMessage(selectedWorktree.path, lastMessageId)
+            lastMessageId = null
+          }
+          
+          const errorMessage: Message = {
+            id: `error-${Date.now()}`,
+            role: 'assistant',
+            content: `Error: ${errorMsg}`,
+            timestamp: new Date(),
+          }
+          addAgentMessage(selectedWorktree.path, errorMessage)
+          setAgentIsSending(selectedWorktree.path, false)
+          return
+        }
+
+        // Handle message.part.updated - create or update streaming message
+        if (eventType === 'message.part.updated' || eventType === 'part.updated') {
+          if (messageId || text) {
+            // Finalize previous streaming message when new one with different ID starts
+            if (lastMessageId && messageId && lastMessageId !== messageId) {
+              finalizeStreamingMessage(selectedWorktree.path, lastMessageId)
+            }
+            if (messageId) lastMessageId = messageId
+            else lastMessageId = `msg-${Date.now()}`
+
+            const streamingMsg: Message = {
+              id: (part?.id as string) || lastMessageId,
+              messageId: lastMessageId,
+              role: 'assistant',
+              content: text,
+              timestamp: new Date(),
+              isStreaming: true,
+              type: msgType,
+            }
+            console.log('[SSE] Adding streaming message:', { messageId: lastMessageId, text: text?.substring(0, 50), type: msgType })
+            addStreamingMessage(selectedWorktree.path, streamingMsg)
+          }
+        } 
+        
+        // Handle message.part.delta - append to existing message
+        else if (eventType === 'message.part.delta' || eventType === 'part.delta') {
+          const deltaMessageId = (properties as Record<string, unknown>)?.messageID as string || rawData?.messageID as string
+          const deltaText = delta || (rawData?.delta as string) || (rawData?.text as string) || ''
+          
+          console.log('[SSE] Delta:', { deltaMessageId, deltaText: deltaText?.substring(0, 50) })
+          
+          if (deltaText) {
+            const targetId = deltaMessageId || lastMessageId
+            if (targetId) {
+              appendStreamingMessageDelta(selectedWorktree.path, targetId, deltaText)
+            } else {
+              const newMsg: Message = {
+                id: `temp-${Date.now()}`,
+                messageId: `msg-${Date.now()}`,
+                role: 'assistant',
+                content: deltaText,
+                timestamp: new Date(),
+                isStreaming: true,
+              }
+              addStreamingMessage(selectedWorktree.path, newMsg)
+              lastMessageId = newMsg.messageId || newMsg.id
+            }
+          }
+        } 
+        
+        // Handle session.diff - agent completed planning
+        else if (eventType === 'session.diff' && lastMessageId) {
+          if (finalizeTimeout) clearTimeout(finalizeTimeout)
+          finalizeTimeout = setTimeout(() => {
+            if (lastMessageId) {
+              finalizeStreamingMessage(selectedWorktree.path, lastMessageId)
+              lastMessageId = null
+            }
+            setAgentIsSending(selectedWorktree.path, false)
+          }, 500)
+        } 
+        
+        // Handle completion events
+        else if (eventType === 'message.completed' || eventType === 'message.finished' || eventType === 'completed' || eventType === 'finished') {
+          if (finalizeTimeout) clearTimeout(finalizeTimeout)
+          if (lastMessageId) {
+            finalizeStreamingMessage(selectedWorktree.path, lastMessageId)
+            lastMessageId = null
+          }
+          setAgentIsSending(selectedWorktree.path, false)
+        }
+        
+        // Catch-all: if we have text content anywhere in the event, display it
+        else if (text || delta) {
+          const content = text || delta || ''
+          console.log('[SSE] Catch-all text event:', content.substring(0, 100))
+          if (content) {
+            const newMsg: Message = {
+              id: `msg-${Date.now()}`,
+              messageId: `msg-${Date.now()}`,
+              role: 'assistant',
+              content: content,
+              timestamp: new Date(),
+              isStreaming: false,
+            }
+            addStreamingMessage(selectedWorktree.path, newMsg)
+            finalizeStreamingMessage(selectedWorktree.path, newMsg.messageId || newMsg.id)
+            setAgentIsSending(selectedWorktree.path, false)
+          }
+        }
+
+        // Set inactivity timeout as fallback
+        inactivityTimeout = setTimeout(() => {
+          console.log('[SSE] Inactivity timeout - finalizing message')
+          if (lastMessageId) {
+            finalizeStreamingMessage(selectedWorktree.path, lastMessageId)
+            lastMessageId = null
+          }
+          setAgentIsSending(selectedWorktree.path, false)
+          
+        }, 5000)
+      })
+    }
+
+    setupListener()
+
+    return () => {
+      if (unlisten) {
+        unlisten()
+      }
+      if (finalizeTimeout) {
+        clearTimeout(finalizeTimeout)
+      }
+      if (inactivityTimeout) {
+        clearTimeout(inactivityTimeout)
+      }
+    }
+  }, [selectedWorktree?.path])
 
   // Parse diff from string
   const parseDiff = (diff: string): DiffLine[] => {
@@ -262,6 +494,7 @@ export function CenterPanel() {
     }
 
     addAgentMessage(selectedWorktree.path, userMessage)
+    clearStreamingMessages(selectedWorktree.path)
     setCommand('')
     setAgentIsSending(selectedWorktree.path, true)
     setAgentStreamingContent(selectedWorktree.path, '')
@@ -275,42 +508,16 @@ export function CenterPanel() {
       const [providerId, modelId] = selectedModel ? selectedModel.split('/') : ['', '']
       console.log('Using provider ID:', providerId, 'model ID:', modelId)
       
-      // Send message and wait for response (synchronous)
-      const response = await invoke('send_opencode_message', {
+      // Send message asynchronously and rely on SSE for streaming response
+      await invoke('send_opencode_message_async', {
         hostname: currentServer.hostname,
         port: currentServer.port,
         sessionId: currentServer.sessionId,
         message: userMessage.content,
-        providerId: providerId || undefined,
-        modelId: modelId || undefined
-      }) as { info: { id: string, role: string }, parts: Array<{ type: string, text?: string }> }
+      })
 
-      console.log('Received response:', response)
-
-      // Extract text content from parts
-      const textContent = response.parts
-        .filter(part => part.type === 'text')
-        .map(part => part.text)
-        .join('\n')
-
-      if (textContent) {
-        const assistantMessage: Message = {
-          id: response.info.id || Date.now().toString(),
-          role: 'assistant',
-          content: textContent,
-          timestamp: new Date()
-        }
-        addAgentMessage(selectedWorktree.path, assistantMessage)
-      } else {
-        const errorMessage: Message = {
-          id: Date.now().toString(),
-          role: 'assistant',
-          content: 'No text content in response.',
-          timestamp: new Date()
-        }
-        addAgentMessage(selectedWorktree.path, errorMessage)
-      }
-      setAgentIsSending(selectedWorktree.path, false)
+      console.log('Message sent, waiting for SSE events...')
+      // Don't set isSending to false here - SSE events will handle the response
     } catch (error) {
       console.error('Failed to send message:', error)
       const errorMessage: Message = {
@@ -461,55 +668,65 @@ export function CenterPanel() {
             <div className="h-full flex flex-col">
               {/* Messages Area */}
               <div ref={terminalRef} className="flex-1 overflow-auto p-4 space-y-4">
-                {agentMessages.length === 0 && !streamingContent ? (
+                {agentMessages.length === 0 && Object.keys(streamingMessages).length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
                     <Command className="w-12 h-12 mb-3 opacity-50" />
                     <p className="text-sm">Send a message to start the conversation</p>
                   </div>
                 ) : (
-                  agentMessages.map((message: Message) => (
-                    <div
-                      key={message.id}
-                      className={cn(
-                        "flex gap-3",
-                        message.role === 'user' ? "justify-end" : "justify-start"
-                      )}
-                    >
-                      {message.role === 'assistant' && (
+                  <>
+                    {agentMessages.map((message: Message) => (
+                      <div
+                        key={message.id}
+                        className={cn(
+                          "flex gap-3",
+                          message.role === 'user' ? "justify-end" : "justify-start"
+                        )}
+                      >
+                        {message.role === 'assistant' && (
+                          <div className="w-8 h-8 bg-[#1a1a1a] rounded-lg flex items-center justify-center flex-shrink-0">
+                            <Command className="w-4 h-4 text-[#9b9b9b]" />
+                          </div>
+                        )}
+                        <div
+                          className={cn(
+                            "max-w-[80%] px-4 py-2 rounded-lg text-sm",
+                            message.role === 'user'
+                              ? "bg-[#d97757] text-white"
+                              : "bg-[#1a1a1a] text-[#e0e0e0]"
+                          )}
+                        >
+                          <p className="whitespace-pre-wrap">{message.content}</p>
+                          <span className="text-xs opacity-50 mt-1 block">
+                            {message.timestamp.toLocaleTimeString()}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                    {/* Streaming messages by messageID */}
+                    {Object.values(streamingMessages).map((message: Message) => (
+                      <div
+                        key={message.messageId || message.id}
+                        className="flex gap-3 justify-start"
+                      >
                         <div className="w-8 h-8 bg-[#1a1a1a] rounded-lg flex items-center justify-center flex-shrink-0">
                           <Command className="w-4 h-4 text-[#9b9b9b]" />
                         </div>
-                      )}
-                      <div
-                        className={cn(
-                          "max-w-[80%] px-4 py-2 rounded-lg text-sm",
-                          message.role === 'user'
-                            ? "bg-[#d97757] text-white"
-                            : "bg-[#1a1a1a] text-[#e0e0e0]"
-                        )}
-                      >
-                        <p className="whitespace-pre-wrap">{message.content}</p>
-                        <span className="text-xs opacity-50 mt-1 block">
-                          {message.timestamp.toLocaleTimeString()}
-                        </span>
+                        <div className="bg-[#1a1a1a] px-4 py-2 rounded-lg max-w-[80%]">
+                          {message.content ? (
+                            <p className="whitespace-pre-wrap text-sm text-[#e0e0e0]">{message.content}</p>
+                          ) : (
+                            <div className="w-4 h-4 border-2 border-[#2a2a2a] border-t-[#9b9b9b] rounded-full animate-spin" />
+                          )}
+                          {message.type && (
+                            <span className="text-xs text-[#6b6b6b] mt-1 block uppercase">
+                              {message.type}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))
-                )}
-                {/* Streaming message */}
-                {(isSending || streamingContent) && (
-                  <div className="flex gap-3 justify-start">
-                    <div className="w-8 h-8 bg-[#1a1a1a] rounded-lg flex items-center justify-center flex-shrink-0">
-                      <Command className="w-4 h-4 text-[#9b9b9b]" />
-                    </div>
-                    <div className="bg-[#1a1a1a] px-4 py-2 rounded-lg max-w-[80%]">
-                      {streamingContent ? (
-                        <p className="whitespace-pre-wrap text-sm text-[#e0e0e0]">{streamingContent}</p>
-                      ) : (
-                        <div className="w-4 h-4 border-2 border-[#2a2a2a] border-t-[#9b9b9b] rounded-full animate-spin" />
-                      )}
-                    </div>
-                  </div>
+                    ))}
+                  </>
                 )}
                 <div ref={messagesEndRef} />
               </div>
