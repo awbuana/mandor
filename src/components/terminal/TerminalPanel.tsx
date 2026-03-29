@@ -33,7 +33,6 @@ export function TerminalPanel() {
     if (isResizing) {
       const handleMouseMove = (e: MouseEvent) => {
         if (panelRef.current) {
-          const rect = panelRef.current.getBoundingClientRect();
           const newHeight = window.innerHeight - e.clientY;
           if (newHeight > 100 && newHeight < window.innerHeight * 0.7) {
             useAppStore.setState({ terminalPanelHeight: newHeight });

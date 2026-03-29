@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use tauri::State;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TerminalSession {
@@ -33,7 +32,7 @@ pub fn spawn_terminal(
         chrono::Utc::now().timestamp_millis()
     );
 
-    let cmd = match agent_type.as_str() {
+    let mut cmd = match agent_type.as_str() {
         "opencode" => {
             let mut cmd = Command::new("opencode");
             cmd.current_dir(&worktree_path)
@@ -66,7 +65,7 @@ pub fn spawn_terminal(
         }
     };
 
-    let child = cmd.spawn().map_err(|e| format!("Failed to spawn terminal: {}", e))?;
+    let _child = cmd.spawn().map_err(|e| format!("Failed to spawn terminal: {}", e))?;
 
     Ok(TerminalSession {
         id: session_id,
@@ -76,16 +75,16 @@ pub fn spawn_terminal(
 }
 
 #[tauri::command]
-pub fn write_to_terminal(session_id: String, input: String) -> Result<(), String> {
+pub fn write_to_terminal(_session_id: String, _input: String) -> Result<(), String> {
     Ok(())
 }
 
 #[tauri::command]
-pub fn resize_terminal(session_id: String, cols: u16, rows: u16) -> Result<(), String> {
+pub fn resize_terminal(_session_id: String, _cols: u16, _rows: u16) -> Result<(), String> {
     Ok(())
 }
 
 #[tauri::command]
-pub fn kill_terminal(session_id: String) -> Result<(), String> {
+pub fn kill_terminal(_session_id: String) -> Result<(), String> {
     Ok(())
 }

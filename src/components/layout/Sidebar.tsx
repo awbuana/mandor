@@ -2,15 +2,34 @@ import { useAppStore } from '@/stores/appStore';
 import { WorktreeList } from '@/components/worktree/WorktreeList';
 import { cn } from '@/lib/utils';
 import { motion } from 'framer-motion';
-import { 
-  TreeStructure, 
-  Terminal, 
+import {
+  TreeStructure,
+  Terminal,
   GitBranch,
-  FolderOpen 
+  FolderOpen
 } from '@phosphor-icons/react';
+import { invoke } from '@tauri-apps/api/core';
+import { Worktree } from '@/types';
 
 export function Sidebar() {
-  const { sidebarCollapsed, toggleSidebar } = useAppStore();
+  const { sidebarCollapsed, toggleSidebar, currentRepoPath, setCurrentRepoPath, setWorktrees } = useAppStore();
+
+  const handleOpenRepository = async () => {
+    console.log('Opening repository...')
+    try {
+      const repoPath: string = await invoke('open_repository')
+      console.log('Selected repo:', repoPath)
+      setCurrentRepoPath(repoPath)
+
+      // Load worktrees for the selected repository
+      const worktrees: Worktree[] = await invoke('list_worktrees', { repoPath })
+      console.log('Loaded worktrees:', worktrees)
+      setWorktrees(worktrees)
+    } catch (error) {
+      console.error('Failed to open repository:', error)
+      alert('Error: ' + error)
+    }
+  }
 
   return (
     <motion.aside 
@@ -67,7 +86,10 @@ export function Sidebar() {
                   Quick Actions
                 </h3>
                 <div className="space-y-1">
-                  <button className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800 hover:text-slate-100 rounded-md transition-colors">
+                  <button
+                    onClick={handleOpenRepository}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800 hover:text-slate-100 rounded-md transition-colors"
+                  >
                     <FolderOpen className="w-4 h-4" />
                     Open Repository
                   </button>
@@ -77,6 +99,18 @@ export function Sidebar() {
                   </button>
                 </div>
               </div>
+
+              {/* Current Repository */}
+              {currentRepoPath && (
+                <div className="pt-2 border-t border-slate-800">
+                  <h3 className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">
+                    Current Repository
+                  </h3>
+                  <p className="text-xs text-slate-300 truncate" title={currentRepoPath}>
+                    {currentRepoPath.split('/').pop()}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -18,6 +18,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             open_app_window,
             git::list_worktrees,
@@ -30,6 +31,7 @@ fn main() {
             git::discard_changes,
             git::commit,
             git::get_branches,
+            git::open_repository,
             worktree::open_in_editor,
             worktree::get_worktree_info,
             terminal::spawn_terminal,

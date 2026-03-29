@@ -112,14 +112,38 @@ pub fn create_worktree(
     path: String,
 ) -> Result<Worktree, String> {
     let worktree_path = PathBuf::from(&repo_path).join(&path);
-    
+
+    // Check if branch exists
+    let branch_check = Command::new("git")
+        .args(&["-C", &repo_path, "rev-parse", "--verify", &branch])
+        .output();
+
+    let branch_exists = match branch_check {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    };
+
+    // Build the worktree add command
+    let mut args = vec![
+        "-C", &repo_path,
+        "worktree", "add",
+    ];
+
+    if !branch_exists {
+        // Create new branch with -b flag
+        args.push("-b");
+        args.push(&branch);
+    }
+
+    args.push(worktree_path.to_str().unwrap());
+
+    if branch_exists {
+        // Use existing branch
+        args.push(&branch);
+    }
+
     let output = Command::new("git")
-        .args(&[
-            "-C", &repo_path,
-            "worktree", "add",
-            worktree_path.to_str().unwrap(),
-            &branch,
-        ])
+        .args(&args)
         .output()
         .map_err(|e| format!("Failed to create worktree: {}", e))?;
 
@@ -226,17 +250,17 @@ pub fn get_worktree_status(worktree_path: String) -> Result<WorktreeStatus, Stri
 
 #[tauri::command]
 pub fn get_diff(worktree_path: String, file_path: Option<String>) -> Result<String, String> {
-    let mut args = vec!["-C", &worktree_path, "diff"];
-    
-    if let Some(file) = file_path {
-        args.push("--");
-        args.push(&file);
-    }
-
-    let output = Command::new("git")
-        .args(&args)
-        .output()
-        .map_err(|e| format!("Failed to get diff: {}", e))?;
+    let output = if let Some(file) = file_path {
+        Command::new("git")
+            .args(&["-C", &worktree_path, "diff", "--", &file])
+            .output()
+            .map_err(|e| format!("Failed to get diff: {}", e))?
+    } else {
+        Command::new("git")
+            .args(&["-C", &worktree_path, "diff"])
+            .output()
+            .map_err(|e| format!("Failed to get diff: {}", e))?
+    };
 
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
@@ -319,4 +343,32 @@ pub fn get_branches(repo_path: String) -> Result<Vec<String>, String> {
         .collect();
 
     Ok(branches)
+}
+
+#[tauri::command]
+pub async fn open_repository(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let folder_path = app
+        .dialog()
+        .file()
+        .set_title("Select Git Repository")
+        .blocking_pick_folder();
+
+    match folder_path {
+        Some(path) => {
+            let path_str = path.to_string();
+
+            // Check if it's a git repository
+            let output = Command::new("git")
+                .args(&["-C", &path_str, "rev-parse", "--git-dir"])
+                .output();
+
+            match output {
+                Ok(result) if result.status.success() => Ok(path_str),
+                _ => Err("Selected directory is not a git repository".to_string()),
+            }
+        }
+        None => Err("No directory selected".to_string()),
+    }
 }

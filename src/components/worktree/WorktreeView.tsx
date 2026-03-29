@@ -2,7 +2,6 @@ import { Worktree, FileStatus } from '@/types';
 import { useAppStore } from '@/stores/appStore';
 import { motion } from 'framer-motion';
 import { 
-  GitBranch, 
   GitCommit, 
   FolderOpen,
   FileCode,
