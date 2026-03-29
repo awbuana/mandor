@@ -20,25 +20,25 @@ export function TerminalInstance({ terminal }: TerminalInstanceProps) {
     // Create terminal instance
     const term = new Terminal({
       theme: {
-        background: '#0f172a',
-        foreground: '#94a3b8',
-        cursor: '#60a5fa',
-        selectionBackground: '#1e40af',
-        black: '#020617',
-        red: '#ef4444',
-        green: '#10b981',
-        yellow: '#f59e0b',
-        blue: '#3b82f6',
+        background: '#0a0a0a',
+        foreground: '#9b9b9b',
+        cursor: '#d97757',
+        selectionBackground: 'rgba(217, 119, 87, 0.3)',
+        black: '#0a0a0a',
+        red: '#f87171',
+        green: '#4ade80',
+        yellow: '#fbbf24',
+        blue: '#6a9bcc',
         magenta: '#a855f7',
-        cyan: '#06b6d4',
-        white: '#f8fafc',
-        brightBlack: '#1e293b',
-        brightRed: '#f87171',
-        brightGreen: '#34d399',
-        brightYellow: '#fbbf24',
-        brightBlue: '#60a5fa',
+        cyan: '#22d3ee',
+        white: '#e0e0e0',
+        brightBlack: '#1a1a1a',
+        brightRed: '#ef4444',
+        brightGreen: '#22c55e',
+        brightYellow: '#f59e0b',
+        brightBlue: '#6a9bcc',
         brightMagenta: '#c084fc',
-        brightCyan: '#22d3ee',
+        brightCyan: '#06b6d4',
         brightWhite: '#ffffff',
       },
       fontSize: 13,
@@ -105,7 +105,7 @@ export function TerminalInstance({ terminal }: TerminalInstanceProps) {
     <div 
       ref={containerRef} 
       className="h-full w-full p-2"
-      style={{ backgroundColor: '#0f172a' }}
+      style={{ backgroundColor: '#0a0a0a' }}
     />
   );
 }

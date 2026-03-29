@@ -22,6 +22,7 @@ interface AppState {
   // Actions
   setCurrentRepoPath: (path: string | null) => void;
   setWorktrees: (worktrees: Worktree[]) => void;
+  addWorktree: (worktree: Worktree) => void;
   setSelectedWorktree: (worktree: Worktree | null) => void;
   setWorktreeStatus: (path: string, status: WorktreeStatus) => void;
 
@@ -47,6 +48,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   setCurrentRepoPath: (path) => set({ currentRepoPath: path }),
   setWorktrees: (worktrees) => set({ worktrees }),
+  addWorktree: (worktree) => set((state) => ({ 
+    worktrees: [...state.worktrees, worktree] 
+  })),
   setSelectedWorktree: (worktree) => set({ selectedWorktree: worktree }),
   setWorktreeStatus: (path, status) => set((state) => ({
     worktreeStatus: { ...state.worktreeStatus, [path]: status }

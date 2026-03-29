@@ -269,6 +269,64 @@ pub fn get_diff(worktree_path: String, file_path: Option<String>) -> Result<Stri
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DiffStats {
+    pub files_changed: i32,
+    pub insertions: i32,
+    pub deletions: i32,
+}
+
+#[tauri::command]
+pub fn get_diff_stats(worktree_path: String) -> Result<DiffStats, String> {
+    let output = Command::new("git")
+        .args(&["-C", &worktree_path, "diff", "--stat"])
+        .output()
+        .map_err(|e| format!("Failed to get diff stats: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut files_changed = 0;
+    let mut insertions = 0;
+    let mut deletions = 0;
+
+    for line in stdout.lines() {
+        // Parse lines like: " src/main.rs | 10 ++++++-----"
+        // Or summary line: " 3 files changed, 15 insertions(+), 7 deletions(-)"
+        if line.contains("files changed") || line.contains("file changed") {
+            // Parse summary line
+            let parts: Vec<&str> = line.split(',').collect();
+            for part in parts {
+                let part = part.trim();
+                if part.contains("files changed") || part.contains("file changed") {
+                    if let Some(num) = part.split_whitespace().next() {
+                        files_changed = num.parse().unwrap_or(0);
+                    }
+                } else if part.contains("insertions") || part.contains("insertion") {
+                    if let Some(num) = part.split_whitespace().next() {
+                        insertions = num.parse().unwrap_or(0);
+                    }
+                } else if part.contains("deletions") || part.contains("deletion") {
+                    if let Some(num) = part.split_whitespace().next() {
+                        deletions = num.parse().unwrap_or(0);
+                    }
+                }
+            }
+        } else if line.contains('|') && !line.starts_with('-') {
+            // Count individual file lines
+            files_changed += 1;
+        }
+    }
+
+    Ok(DiffStats {
+        files_changed,
+        insertions,
+        deletions,
+    })
+}
+
 #[tauri::command]
 pub fn stage_file(worktree_path: String, file_path: String) -> Result<(), String> {
     let output = Command::new("git")

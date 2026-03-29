@@ -26,6 +26,7 @@ fn main() {
             git::delete_worktree,
             git::get_worktree_status,
             git::get_diff,
+            git::get_diff_stats,
             git::stage_file,
             git::unstage_file,
             git::discard_changes,
