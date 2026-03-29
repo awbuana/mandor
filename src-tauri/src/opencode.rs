@@ -193,6 +193,8 @@ pub async fn send_opencode_message_async(
     port: u16,
     session_id: String,
     message: String,
+    provider_id: Option<String>,
+    model_id: Option<String>,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
     let message_url = format!("http://{}:{}/session/{}/message", hostname, port, session_id);
@@ -200,17 +202,29 @@ pub async fn send_opencode_message_async(
     println!("Sending message to: {}", message_url);
     println!("Session ID: {}", session_id);
     println!("Message: {}", message);
+    println!("Provider: {:?}, Model: {:?}", provider_id, model_id);
+
+    // Build request body
+    let mut body = serde_json::json!({
+        "parts": [
+            {
+                "type": "text",
+                "text": message
+            }
+        ]
+    });
+
+    // Add model if provider and model are specified
+    if let (Some(provider), Some(model)) = (&provider_id, &model_id) {
+        body["model"] = serde_json::json!({
+            "providerID": provider,
+            "modelID": model
+        });
+    }
 
     let response = client
         .post(&message_url)
-        .json(&serde_json::json!({
-            "parts": [
-                {
-                    "type": "text",
-                    "text": message
-                }
-            ]
-        }))
+        .json(&body)
         .send()
         .await
         .map_err(|e| {

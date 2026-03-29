@@ -39,6 +39,25 @@ interface Message {
   messageId?: string
   partId?: string
   type?: string
+  toolCall?: {
+    tool: string
+    callID: string
+    status: 'pending' | 'running' | 'completed' | 'error'
+    input?: Record<string, unknown>
+  }
+}
+
+interface QuestionOption {
+  label: string
+  description: string
+}
+
+interface PendingQuestion {
+  id: string
+  question: string
+  header: string
+  options: QuestionOption[]
+  callID: string
 }
 
 
@@ -82,8 +101,7 @@ export function CenterPanel() {
     setAgentStreamingContent,
     setAgentSelectedModel,
     fetchAgentModels,
-    addStreamingMessage,
-    appendStreamingMessageDelta,
+    upsertStreamingMessage,
     finalizeStreamingMessage,
     clearStreamingMessages,
   } = useAppStore()
@@ -92,6 +110,7 @@ export function CenterPanel() {
   const [command, setCommand] = useState('')
   const [diffContent, setDiffContent] = useState<DiffLine[]>([])
   const [loadingDiff, setLoadingDiff] = useState(false)
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
   const terminalRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -179,9 +198,8 @@ export function CenterPanel() {
     if (!selectedWorktree) return
 
     let unlisten: UnlistenFn | undefined
-    let finalizeTimeout: ReturnType<typeof setTimeout> | null = null
-    let inactivityTimeout: ReturnType<typeof setTimeout> | null = null
-    let lastMessageId: string | null = null
+    let activeMessageIds = new Set<string>()
+    let isBusy = false
 
     const setupListener = async () => {
       unlisten = await listen<{
@@ -190,166 +208,116 @@ export function CenterPanel() {
         data: {
           type?: string
           properties?: {
-            sessionID?: string
-            messageID?: string
-            diff?: Array<unknown>
+            status?: { type?: string }
             part?: {
               id?: string
               messageID?: string
-              sessionID?: string
-              type?: string
               text?: string
-              time?: { start?: number } | number
+              type?: string
+              tool?: string
+              callID?: string
+              state?: {
+                status?: string
+                input?: Record<string, unknown>
+              }
             }
-            field?: string
-            delta?: string
           }
         }
       }>('opencode-event', (event) => {
-        const { event: eventType, data } = event.payload
+        const { data } = event.payload
 
-        console.log('[SSE Event] Raw:', JSON.stringify(event.payload, null, 2))
-        
-        const properties = data?.properties as Record<string, unknown> | undefined
-        console.log('[SSE Event]', eventType, 'properties:', JSON.stringify(properties, null, 2))
-
-        // Clear inactivity timeout on any event
-        if (inactivityTimeout) {
-          clearTimeout(inactivityTimeout)
-        }
-
-        // Cast data to any to handle flexible structure
-        const rawData = data as Record<string, unknown>
-        
-        // Extract properties - could be nested or flat depending on event
-        const part = (properties as Record<string, unknown>)?.part as Record<string, unknown> | undefined
-        const messageId = (part?.messageID as string) || (part?.messageId as string) || (part?.id as string) || (rawData?.messageID as string) || (rawData?.messageId as string)
-        const text = (part?.text as string) || (part?.content as string) || (rawData?.text as string) || (rawData?.content as string) || ''
-        const delta = (properties as Record<string, unknown>)?.delta as string || rawData?.delta as string
-        const msgType = (part?.type as string) || (rawData?.type as string) || 'text'
-
-        // Handle error events
-        if (eventType === 'error' || eventType === 'message.error') {
-          const errorMsg = (properties?.error as string) || (rawData?.error as string) || (rawData?.message as string) || 'Unknown error'
-          console.log('[SSE] Error event:', errorMsg)
-          
-          if (lastMessageId) {
-            finalizeStreamingMessage(selectedWorktree.path, lastMessageId)
-            lastMessageId = null
+        if (data?.type === 'session.status') {
+          const wasBusy = isBusy
+          isBusy = data?.properties?.status?.type === 'busy'
+          if (isBusy && !wasBusy) {
+            activeMessageIds.forEach(id => finalizeStreamingMessage(selectedWorktree.path, id))
+            activeMessageIds.clear()
           }
-          
-          const errorMessage: Message = {
-            id: `error-${Date.now()}`,
-            role: 'assistant',
-            content: `Error: ${errorMsg}`,
-            timestamp: new Date(),
-          }
-          addAgentMessage(selectedWorktree.path, errorMessage)
-          setAgentIsSending(selectedWorktree.path, false)
           return
         }
 
-        // Handle message.part.updated - create or update streaming message
-        if (eventType === 'message.part.updated' || eventType === 'part.updated') {
-          if (messageId || text) {
-            // Finalize previous streaming message when new one with different ID starts
-            if (lastMessageId && messageId && lastMessageId !== messageId) {
-              finalizeStreamingMessage(selectedWorktree.path, lastMessageId)
-            }
-            if (messageId) lastMessageId = messageId
-            else lastMessageId = `msg-${Date.now()}`
-
-            const streamingMsg: Message = {
-              id: (part?.id as string) || lastMessageId,
-              messageId: lastMessageId,
-              role: 'assistant',
-              content: text,
-              timestamp: new Date(),
-              isStreaming: true,
-              type: msgType,
-            }
-            console.log('[SSE] Adding streaming message:', { messageId: lastMessageId, text: text?.substring(0, 50), type: msgType })
-            addStreamingMessage(selectedWorktree.path, streamingMsg)
-          }
-        } 
-        
-        // Handle message.part.delta - append to existing message
-        else if (eventType === 'message.part.delta' || eventType === 'part.delta') {
-          const deltaMessageId = (properties as Record<string, unknown>)?.messageID as string || rawData?.messageID as string
-          const deltaText = delta || (rawData?.delta as string) || (rawData?.text as string) || ''
-          
-          console.log('[SSE] Delta:', { deltaMessageId, deltaText: deltaText?.substring(0, 50) })
-          
-          if (deltaText) {
-            const targetId = deltaMessageId || lastMessageId
-            if (targetId) {
-              appendStreamingMessageDelta(selectedWorktree.path, targetId, deltaText)
-            } else {
-              const newMsg: Message = {
-                id: `temp-${Date.now()}`,
-                messageId: `msg-${Date.now()}`,
-                role: 'assistant',
-                content: deltaText,
-                timestamp: new Date(),
-                isStreaming: true,
-              }
-              addStreamingMessage(selectedWorktree.path, newMsg)
-              lastMessageId = newMsg.messageId || newMsg.id
-            }
-          }
-        } 
-        
-        // Handle session.diff - agent completed planning
-        else if (eventType === 'session.diff' && lastMessageId) {
-          if (finalizeTimeout) clearTimeout(finalizeTimeout)
-          finalizeTimeout = setTimeout(() => {
-            if (lastMessageId) {
-              finalizeStreamingMessage(selectedWorktree.path, lastMessageId)
-              lastMessageId = null
-            }
-            setAgentIsSending(selectedWorktree.path, false)
-          }, 500)
-        } 
-        
-        // Handle completion events
-        else if (eventType === 'message.completed' || eventType === 'message.finished' || eventType === 'completed' || eventType === 'finished') {
-          if (finalizeTimeout) clearTimeout(finalizeTimeout)
-          if (lastMessageId) {
-            finalizeStreamingMessage(selectedWorktree.path, lastMessageId)
-            lastMessageId = null
-          }
+        if (data?.type === 'session.idle') {
+          activeMessageIds.forEach(id => finalizeStreamingMessage(selectedWorktree.path, id))
+          activeMessageIds.clear()
           setAgentIsSending(selectedWorktree.path, false)
-        }
-        
-        // Catch-all: if we have text content anywhere in the event, display it
-        else if (text || delta) {
-          const content = text || delta || ''
-          console.log('[SSE] Catch-all text event:', content.substring(0, 100))
-          if (content) {
-            const newMsg: Message = {
-              id: `msg-${Date.now()}`,
-              messageId: `msg-${Date.now()}`,
-              role: 'assistant',
-              content: content,
-              timestamp: new Date(),
-              isStreaming: false,
-            }
-            addStreamingMessage(selectedWorktree.path, newMsg)
-            finalizeStreamingMessage(selectedWorktree.path, newMsg.messageId || newMsg.id)
-            setAgentIsSending(selectedWorktree.path, false)
-          }
+          isBusy = false
+          return
         }
 
-        // Set inactivity timeout as fallback
-        inactivityTimeout = setTimeout(() => {
-          console.log('[SSE] Inactivity timeout - finalizing message')
-          if (lastMessageId) {
-            finalizeStreamingMessage(selectedWorktree.path, lastMessageId)
-            lastMessageId = null
-          }
+        if (data?.type === 'question.asked') {
+          activeMessageIds.forEach(id => finalizeStreamingMessage(selectedWorktree.path, id))
+          activeMessageIds.clear()
           setAgentIsSending(selectedWorktree.path, false)
-          
-        }, 5000)
+          isBusy = false
+
+          const props = data?.properties as Record<string, unknown>
+          const questions = (props?.questions as Array<{
+            question?: string
+            header?: string
+            options?: Array<{ label?: string; description?: string }>
+          }>) || []
+          const tool = props?.tool as { messageID?: string; callID?: string } | undefined
+
+          if (questions.length > 0) {
+            const q = questions[0]
+            setPendingQuestion({
+              id: props?.id as string || '',
+              question: q.question || '',
+              header: q.header || '',
+              options: (q.options || []).map(o => ({ label: o.label || '', description: o.description || '' })),
+              callID: tool?.callID || '',
+            })
+          }
+          return
+        }
+
+        if (!isBusy) return
+
+        if (data?.type !== 'message.part.updated') return
+
+        const part = data?.properties?.part
+        const partType = part?.type
+        const text = part?.text || ''
+
+        const partId = part?.id || part?.messageID || `msg-${Date.now()}`
+
+        if (partType === 'tool') {
+          const toolCall: Message['toolCall'] = {
+            tool: part?.tool || 'unknown',
+            callID: part?.callID || '',
+            status: (part?.state?.status as 'pending' | 'running' | 'completed' | 'error') || 'pending',
+            input: part?.state?.input,
+          }
+
+          const streamingMsg: Message = {
+            id: partId,
+            messageId: partId,
+            role: 'assistant',
+            content: '',
+            timestamp: new Date(),
+            isStreaming: true,
+            type: 'tool',
+            toolCall,
+          }
+
+          activeMessageIds.add(partId)
+          upsertStreamingMessage(selectedWorktree.path, streamingMsg)
+          return
+        }
+
+        if (!text) return
+
+        const streamingMsg: Message = {
+          id: partId,
+          messageId: partId,
+          role: 'assistant',
+          content: text,
+          timestamp: new Date(),
+          isStreaming: true,
+        }
+
+        activeMessageIds.add(partId)
+        upsertStreamingMessage(selectedWorktree.path, streamingMsg)
       })
     }
 
@@ -358,12 +326,6 @@ export function CenterPanel() {
     return () => {
       if (unlisten) {
         unlisten()
-      }
-      if (finalizeTimeout) {
-        clearTimeout(finalizeTimeout)
-      }
-      if (inactivityTimeout) {
-        clearTimeout(inactivityTimeout)
       }
     }
   }, [selectedWorktree?.path])
@@ -514,6 +476,8 @@ export function CenterPanel() {
         port: currentServer.port,
         sessionId: currentServer.sessionId,
         message: userMessage.content,
+        providerId: providerId || null,
+        modelId: modelId || null,
       })
 
       console.log('Message sent, waiting for SSE events...')
@@ -524,6 +488,42 @@ export function CenterPanel() {
         id: Date.now().toString(),
         role: 'assistant',
         content: `Error: ${error instanceof Error ? error.message : 'Failed to send message'}`,
+        timestamp: new Date()
+      }
+      if (selectedWorktree) {
+        addAgentMessage(selectedWorktree.path, errorMessage)
+      }
+      setAgentIsSending(selectedWorktree.path, false)
+    }
+  }
+
+  const handleAnswerQuestion = async (label: string) => {
+    if (!pendingQuestion || !selectedWorktree || !currentServer?.isRunning) return
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: label,
+      timestamp: new Date()
+    }
+
+    addAgentMessage(selectedWorktree.path, userMessage)
+    setPendingQuestion(null)
+    setAgentIsSending(selectedWorktree.path, true)
+
+    try {
+      await invoke('send_opencode_message_async', {
+        hostname: currentServer.hostname,
+        port: currentServer.port,
+        sessionId: currentServer.sessionId,
+        message: label,
+      })
+    } catch (error) {
+      console.error('Failed to answer question:', error)
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: `Error: ${error instanceof Error ? error.message : 'Failed to answer question'}`,
         timestamp: new Date()
       }
       if (selectedWorktree) {
@@ -713,15 +713,29 @@ export function CenterPanel() {
                           <Command className="w-4 h-4 text-[#9b9b9b]" />
                         </div>
                         <div className="bg-[#1a1a1a] px-4 py-2 rounded-lg max-w-[80%]">
-                          {message.content ? (
+                          {message.toolCall ? (
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-[#d97757] uppercase font-mono">{message.toolCall.tool}</span>
+                                <span className={cn(
+                                  "text-xs px-1.5 py-0.5 rounded",
+                                  message.toolCall.status === 'running' ? "bg-[#3a3a2a] text-[#d97757]" :
+                                  message.toolCall.status === 'completed' ? "bg-[#2a3a2a] text-[#57d977]" :
+                                  "bg-[#2a2a2a] text-[#9b9b9b]"
+                                )}>
+                                  {message.toolCall.status}
+                                </span>
+                              </div>
+                              {message.toolCall.input && Object.keys(message.toolCall.input).length > 0 && (
+                                <pre className="text-xs text-[#6b6b6b] font-mono overflow-x-auto">
+                                  {JSON.stringify(message.toolCall.input, null, 2)}
+                                </pre>
+                              )}
+                            </div>
+                          ) : message.content ? (
                             <p className="whitespace-pre-wrap text-sm text-[#e0e0e0]">{message.content}</p>
                           ) : (
                             <div className="w-4 h-4 border-2 border-[#2a2a2a] border-t-[#9b9b9b] rounded-full animate-spin" />
-                          )}
-                          {message.type && (
-                            <span className="text-xs text-[#6b6b6b] mt-1 block uppercase">
-                              {message.type}
-                            </span>
                           )}
                         </div>
                       </div>
@@ -924,6 +938,31 @@ export function CenterPanel() {
           ) : (
             <div className="text-xs text-[#6b6b6b]">
               No providers available. Check console for errors.
+            </div>
+          )}
+          {pendingQuestion && (
+            <div className="px-4 py-3 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg mb-3">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs text-[#d97757] uppercase font-mono">Question</span>
+                {pendingQuestion.header && (
+                  <span className="text-xs text-[#6b6b6b]">— {pendingQuestion.header}</span>
+                )}
+              </div>
+              <p className="text-sm text-[#e0e0e0] mb-3">{pendingQuestion.question}</p>
+              <div className="flex flex-col gap-2">
+                {pendingQuestion.options.map((option, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => handleAnswerQuestion(option.label)}
+                    className="text-left px-3 py-2 bg-[#111111] hover:bg-[#2a2a2a] border border-[#2a2a2a] hover:border-[#3a3a3a] rounded text-sm transition-colors"
+                  >
+                    <span className="text-[#d97757] font-mono">{option.label}</span>
+                    {option.description && (
+                      <p className="text-xs text-[#6b6b6b] mt-1">{option.description}</p>
+                    )}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           <form onSubmit={handleSubmitCommand} className="relative">

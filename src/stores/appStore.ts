@@ -113,6 +113,7 @@ interface AppState {
   // Streaming message actions (per worktree)
   addStreamingMessage: (worktreePath: string, message: AgentMessage) => void;
   updateStreamingMessage: (worktreePath: string, messageId: string, updates: Partial<AgentMessage>) => void;
+  upsertStreamingMessage: (worktreePath: string, message: AgentMessage) => void;
   appendStreamingMessageDelta: (worktreePath: string, messageId: string, delta: string) => void;
   finalizeStreamingMessage: (worktreePath: string, messageId: string) => void;
   clearStreamingMessages: (worktreePath: string) => void;
@@ -404,6 +405,46 @@ export const useAppStore = create<AppState>((set, get) => ({
             streamingMessages: {
               ...currentSession.agent.streamingMessages,
               [messageId]: { ...existingMessage, ...updates },
+            },
+          }
+        }
+      }
+    };
+  }),
+
+  upsertStreamingMessage: (worktreePath: string, message: AgentMessage) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+    const key = message.messageId || message.id;
+    const existingMessage = currentSession.agent.streamingMessages[key];
+
+    if (existingMessage) {
+      return {
+        worktreeSessions: {
+          ...state.worktreeSessions,
+          [worktreePath]: {
+            ...currentSession,
+            agent: {
+              ...currentSession.agent,
+              streamingMessages: {
+                ...currentSession.agent.streamingMessages,
+                [key]: { ...existingMessage, ...message },
+              },
+            }
+          }
+        }
+      };
+    }
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            streamingMessages: {
+              ...currentSession.agent.streamingMessages,
+              [key]: message,
             },
           }
         }

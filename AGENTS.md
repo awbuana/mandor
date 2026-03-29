@@ -95,7 +95,7 @@ cd src-tauri && cargo test        # Run Rust tests
 ### Rust Conventions
 - Use snake_case for functions and variables
 - Use PascalCase for structs and enums
-- Organize commands in modules (git.rs, worktree.rs, terminal.rs)
+- Organize commands in modules (git.rs, worktree.rs, terminal.rs, opencode.rs)
 - Use `tauri::command` for frontend-facing functions
 
 ## Project Structure
@@ -103,21 +103,40 @@ cd src-tauri && cargo test        # Run Rust tests
 ```
 src/
   components/
-    layout/     # App layout components
-    ui/         # Reusable UI primitives
-    worktree/   # Worktree-related components
-    terminal/   # Terminal components
-    diff/       # Diff viewer components
-  stores/       # Zustand stores
-  types/        # TypeScript interfaces
-  lib/          # Utilities (cn, etc.)
-  hooks/        # Custom React hooks
+    layout/
+      AppShell.tsx    # Main app shell
+      CenterPanel.tsx
+      Sidebar.tsx
+      TitleBar.tsx
+      ReviewPanel.tsx
+    ui/               # Reusable UI primitives
+    worktree/
+      WorktreeView.tsx
+      WorktreeList.tsx
+      CreateWorktreeModal.tsx
+    terminal/
+      TerminalInstance.tsx
+    diff/
+      DiffViewer.tsx
+      FileDiffViewer.tsx
+  stores/
+    appStore.ts      # Zustand store
+  types/
+    index.ts         # TypeScript interfaces
+  lib/
+    utils.ts         # Utilities (cn, etc.)
+  hooks/             # Custom React hooks
+  App.tsx            # Root component
+  main.tsx           # Entry point
+  index.css          # Global styles
+
 src-tauri/
-  src/          # Rust source code
-    main.rs     # Entry point
-    git.rs      # Git operations
-    worktree.rs # Worktree operations
-    terminal.rs # Terminal operations
+  src/
+    main.rs          # Entry point
+    git.rs           # Git operations
+    worktree.rs      # Worktree operations
+    terminal.rs      # Terminal operations
+    opencode.rs      # Opencode agent integration
 ```
 
 ## Technology Stack
@@ -129,3 +148,14 @@ src-tauri/
 - **Animation**: Framer Motion
 - **Icons**: Phosphor Icons
 - **Terminal**: XTerm.js
+- **Diff**: Custom diff viewer implementation
+
+## Available Scripts
+
+```bash
+npm run dev          # Start Vite dev server
+npm run build        # TypeScript compile + Vite build
+npm run preview      # Preview production build
+npm run tauri dev    # Start Tauri dev mode
+npm run tauri build  # Build Tauri app
+```
