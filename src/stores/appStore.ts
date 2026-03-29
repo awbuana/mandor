@@ -241,7 +241,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       const result = await invoke('start_opencode_server', {
         worktreePath,
         port,
-      }) as { port: number; hostname: string; sessionId: string };
+      }) as { port: number; hostname: string; session_id: string };
+
+      console.log('Server started:', result)
 
       set((state) => ({
         opencodeServers: {
@@ -252,7 +254,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             isRunning: true,
             port: result.port,
             hostname: result.hostname,
-            sessionId: result.sessionId,
+            sessionId: result.session_id,
             isInitializing: false,
             error: null,
           }

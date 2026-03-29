@@ -12,6 +12,7 @@ import {
 import { AgentType } from '@/types'
 import { useState, useRef, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 
 type AgentTab = {
   id: string
@@ -33,6 +34,41 @@ interface Message {
   role: 'user' | 'assistant'
   content: string
   timestamp: Date
+  isStreaming?: boolean
+}
+
+interface StreamEventPayload {
+  session_id: string
+  event?: string
+  data: StreamEventData
+}
+
+interface StreamEventData {
+  type?: string
+  event?: string
+  message?: MessageData
+  info?: {
+    id?: string
+    role?: string
+  }
+  parts?: Array<{
+    type?: string
+    text?: string
+  }>
+  content?: string
+  text?: string
+  delta?: string
+}
+
+interface MessageData {
+  info?: {
+    id?: string
+    role?: string
+  }
+  parts?: Array<{
+    type?: string
+    text?: string
+  }>
 }
 
 const AGENT_TABS: AgentTab[] = [
@@ -77,17 +113,93 @@ export function CenterPanel() {
   const [loadingDiff, setLoadingDiff] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [isSending, setIsSending] = useState(false)
+  const [streamingContent, setStreamingContent] = useState('')
   const terminalRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const unlistenRef = useRef<(() => void) | null>(null)
 
   // Get server for selected worktree
   const currentServer = selectedWorktree ? getOpencodeServer(selectedWorktree.path) : undefined
+  
+  // Debug logging
+  useEffect(() => {
+    if (currentServer) {
+      console.log('Current server state:', {
+        isRunning: currentServer.isRunning,
+        sessionId: currentServer.sessionId,
+        port: currentServer.port,
+        hostname: currentServer.hostname
+      })
+    }
+  }, [currentServer])
 
   // Get file session for selected worktree
   const fileSession = selectedWorktree 
     ? getWorktreeFileSession(selectedWorktree.path)
     : { openFiles: [], activeFile: null }
   const { openFiles, activeFile } = fileSession
+
+  // Setup event listener for streaming
+  useEffect(() => {
+    if (!currentServer?.isRunning || !currentServer.sessionId) return
+
+    console.log('Setting up event listener for session:', currentServer.sessionId)
+
+    const setupListener = async () => {
+      // Start the event stream in background
+      invoke('stream_opencode_events', {
+        hostname: currentServer.hostname,
+        port: currentServer.port,
+        sessionId: currentServer.sessionId,
+      }).catch(err => {
+        console.error('Event stream error:', err)
+      })
+
+      // Listen for events
+      const unlisten = await listen<StreamEventPayload>('opencode-event', (event) => {
+        console.log('Received opencode event:', event.payload)
+        
+        const { event: eventName, data } = event.payload
+        
+        // Handle different event types
+        if (eventName === 'message.delta' || data?.type === 'delta') {
+          // Handle streaming delta content
+          const delta = data?.delta || data?.content || data?.text || ''
+          if (delta) {
+            console.log('Received delta:', delta)
+            setStreamingContent(prev => prev + delta)
+          }
+        } else if (data?.parts && data.parts.length > 0) {
+          // Handle complete message parts
+          const textContent = data.parts
+            .filter((part: {type?: string, text?: string}) => part.type === 'text' || part.type === 'content')
+            .map((part: {type?: string, text?: string}) => part.text || '')
+            .join('')
+          
+          if (textContent) {
+            console.log('Received message content:', textContent.substring(0, 100))
+            setStreamingContent(prev => prev + textContent)
+          }
+        } else if (data?.content || data?.text) {
+          // Handle direct content
+          const content = data.content || data.text || ''
+          console.log('Received direct content:', content.substring(0, 100))
+          setStreamingContent(prev => prev + content)
+        }
+      })
+
+      unlistenRef.current = unlisten
+    }
+
+    setupListener()
+
+    return () => {
+      if (unlistenRef.current) {
+        unlistenRef.current()
+        unlistenRef.current = null
+      }
+    }
+  }, [currentServer?.isRunning, currentServer?.sessionId, currentServer?.hostname, currentServer?.port])
 
   // Parse diff from string
   const parseDiff = (diff: string): DiffLine[] => {
@@ -147,7 +259,7 @@ export function CenterPanel() {
   // Scroll to bottom of messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  }, [messages, streamingContent])
 
   const handleTabClick = async (tabId: string) => {
     setActiveTab(tabId)
@@ -190,7 +302,22 @@ export function CenterPanel() {
 
   const handleSubmitCommand = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!command.trim() || !selectedWorktree || !currentServer?.isRunning) return
+    if (!command.trim() || !selectedWorktree || !currentServer?.isRunning) {
+      console.log('Cannot send message:', { command: !!command.trim(), selectedWorktree: !!selectedWorktree, serverRunning: currentServer?.isRunning })
+      return
+    }
+    
+    if (!currentServer.sessionId) {
+      console.error('No session ID available')
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: 'Error: No active session. Please restart the server.',
+        timestamp: new Date()
+      }
+      setMessages(prev => [...prev, errorMessage])
+      return
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -202,29 +329,47 @@ export function CenterPanel() {
     setMessages(prev => [...prev, userMessage])
     setCommand('')
     setIsSending(true)
+    setStreamingContent('')
 
     try {
+      console.log('Sending message to session:', currentServer.sessionId)
+      console.log('Server:', currentServer.hostname, currentServer.port)
+      
+      // Send message and wait for response (synchronous)
+      setIsSending(true)
       const response = await invoke('send_opencode_message', {
         hostname: currentServer.hostname,
         port: currentServer.port,
         sessionId: currentServer.sessionId,
         message: userMessage.content
-      }) as { info: { id: string }, parts: Array<{ type: string; text?: string }> }
+      }) as { info: { id: string, role: string }, parts: Array<{ type: string, text?: string }> }
 
-      // Extract text content from response parts
-      const assistantContent = response.parts
+      console.log('Received response:', response)
+
+      // Extract text content from parts
+      const textContent = response.parts
         .filter(part => part.type === 'text')
         .map(part => part.text)
         .join('\n')
 
-      const assistantMessage: Message = {
-        id: response.info.id || Date.now().toString(),
-        role: 'assistant',
-        content: assistantContent || 'No response',
-        timestamp: new Date()
+      if (textContent) {
+        const assistantMessage: Message = {
+          id: response.info.id || Date.now().toString(),
+          role: 'assistant',
+          content: textContent,
+          timestamp: new Date()
+        }
+        setMessages(prev => [...prev, assistantMessage])
+      } else {
+        const errorMessage: Message = {
+          id: Date.now().toString(),
+          role: 'assistant',
+          content: 'No text content in response.',
+          timestamp: new Date()
+        }
+        setMessages(prev => [...prev, errorMessage])
       }
-
-      setMessages(prev => [...prev, assistantMessage])
+      setIsSending(false)
     } catch (error) {
       console.error('Failed to send message:', error)
       const errorMessage: Message = {
@@ -234,7 +379,6 @@ export function CenterPanel() {
         timestamp: new Date()
       }
       setMessages(prev => [...prev, errorMessage])
-    } finally {
       setIsSending(false)
     }
   }
@@ -374,7 +518,7 @@ export function CenterPanel() {
             <div className="h-full flex flex-col">
               {/* Messages Area */}
               <div ref={terminalRef} className="flex-1 overflow-auto p-4 space-y-4">
-                {messages.length === 0 ? (
+                {messages.length === 0 && !streamingContent ? (
                   <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
                     <Command className="w-12 h-12 mb-3 opacity-50" />
                     <p className="text-sm">Send a message to start the conversation</p>
@@ -409,13 +553,18 @@ export function CenterPanel() {
                     </div>
                   ))
                 )}
-                {isSending && (
+                {/* Streaming message */}
+                {(isSending || streamingContent) && (
                   <div className="flex gap-3 justify-start">
                     <div className="w-8 h-8 bg-[#1a1a1a] rounded-lg flex items-center justify-center flex-shrink-0">
                       <Command className="w-4 h-4 text-[#9b9b9b]" />
                     </div>
-                    <div className="bg-[#1a1a1a] px-4 py-2 rounded-lg">
-                      <div className="w-4 h-4 border-2 border-[#2a2a2a] border-t-[#9b9b9b] rounded-full animate-spin" />
+                    <div className="bg-[#1a1a1a] px-4 py-2 rounded-lg max-w-[80%]">
+                      {streamingContent ? (
+                        <p className="whitespace-pre-wrap text-sm text-[#e0e0e0]">{streamingContent}</p>
+                      ) : (
+                        <div className="w-4 h-4 border-2 border-[#2a2a2a] border-t-[#9b9b9b] rounded-full animate-spin" />
+                      )}
                     </div>
                   </div>
                 )}

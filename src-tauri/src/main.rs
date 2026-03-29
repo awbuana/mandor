@@ -42,6 +42,9 @@ fn main() {
             terminal::kill_terminal,
             opencode::start_opencode_server,
             opencode::send_opencode_message,
+            opencode::send_opencode_message_async,
+            opencode::list_session_messages,
+            opencode::stream_opencode_events,
             opencode::check_opencode_health,
             opencode::stop_opencode_server,
         ])

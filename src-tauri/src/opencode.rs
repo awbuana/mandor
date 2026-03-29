@@ -1,7 +1,8 @@
 use std::process::Stdio;
-use tauri::command;
+use tauri::{command, Emitter};
 use tokio::process::Command;
 use serde::{Deserialize, Serialize};
+use futures::StreamExt;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct OpencodeServerResult {
@@ -14,6 +15,31 @@ pub struct OpencodeServerResult {
 pub struct ServerHealth {
     pub healthy: bool,
     pub version: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MessagePart {
+    pub r#type: String,
+    pub text: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MessageInfo {
+    pub id: String,
+    pub role: String,
+    pub timestamp: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Message {
+    pub info: MessageInfo,
+    pub parts: Vec<MessagePart>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct StreamEvent {
+    pub event: String,
+    pub data: serde_json::Value,
 }
 
 /// Start the opencode server for a worktree
@@ -63,8 +89,8 @@ pub async fn start_opencode_server(
         Ok(None) => {
             // Server is running, proceed
         }
-        Err(e) => {
-            return Err(format!("Failed to check server status: {}", e));
+        Err(_e) => {
+            return Err("Failed to check server status".to_string());
         }
     }
     
@@ -102,14 +128,23 @@ pub async fn start_opencode_server(
                 return Err(format!("Health check failed with status: {}", response.status()));
             }
         }
-        Err(e) => {
-            // Server might still be starting, return with a placeholder session ID
-            // The frontend can poll for health
-            return Ok(OpencodeServerResult {
-                port,
-                hostname,
-                session_id: format!("pending_{}", uuid::Uuid::new_v4()),
-            });
+        Err(_e) => {
+            // Server might still be starting, wait a bit more and try to create session
+            tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+            
+            // Try to create session anyway
+            match create_session(&hostname, port).await {
+                Ok(session_id) => {
+                    return Ok(OpencodeServerResult {
+                        port,
+                        hostname,
+                        session_id,
+                    });
+                }
+                Err(_) => {
+                    return Err("Failed to start opencode server and create session".to_string());
+                }
+            }
         }
     }
 }
@@ -118,6 +153,8 @@ pub async fn start_opencode_server(
 async fn create_session(hostname: &str, port: u16) -> Result<String, String> {
     let client = reqwest::Client::new();
     let session_url = format!("http://{}:{}/session", hostname, port);
+    
+    println!("Creating session at: {}", session_url);
     
     let response = client
         .post(&session_url)
@@ -128,22 +165,98 @@ async fn create_session(hostname: &str, port: u16) -> Result<String, String> {
         .await
         .map_err(|e| format!("Failed to create session: {}", e))?;
     
+    println!("Session creation response status: {}", response.status());
+    
     if response.status().is_success() {
         let session: serde_json::Value = response
             .json()
             .await
             .map_err(|e| format!("Failed to parse session response: {}", e))?;
         
+        println!("Session response: {:?}", session);
+        
         session["id"]
             .as_str()
             .map(|s| s.to_string())
             .ok_or_else(|| "Session ID not found in response".to_string())
     } else {
-        Err(format!("Failed to create session: {}", response.status()))
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        Err(format!("Failed to create session: {} - {}", status, error_text))
     }
 }
 
-/// Send a message to an active opencode session
+/// Send a message asynchronously (no wait) and return immediately
+#[command]
+pub async fn send_opencode_message_async(
+    hostname: String,
+    port: u16,
+    session_id: String,
+    message: String,
+) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let message_url = format!("http://{}:{}/session/{}/message", hostname, port, session_id);
+    
+    println!("Sending message to: {}", message_url);
+    println!("Session ID: {}", session_id);
+    println!("Message: {}", message);
+    
+    let response = client
+        .post(&message_url)
+        .json(&serde_json::json!({
+            "parts": [
+                {
+                    "type": "text",
+                    "text": message
+                }
+            ]
+        }))
+        .send()
+        .await
+        .map_err(|e| {
+            println!("Network error sending message: {}", e);
+            format!("Failed to send message: {}", e)
+        })?;
+    
+    let status = response.status();
+    println!("Response status: {}", status);
+    
+    if status.is_success() {
+        // Try to get the response body
+        let body = response.text().await.unwrap_or_default();
+        println!("Response body: {}", body);
+        
+        // Parse the response and extract text content from parts
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+            if let Some(parts) = json.get("parts").and_then(|p| p.as_array()) {
+                let text_content: String = parts
+                    .iter()
+                    .filter_map(|part| {
+                        if part.get("type").and_then(|t| t.as_str()) == Some("text") {
+                            part.get("text").and_then(|t| t.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                
+                println!("Extracted text content: {}", text_content);
+                return Ok(text_content);
+            }
+        }
+        
+        // Fallback: return the raw body if we couldn't parse it
+        Ok(body)
+    } else {
+        // Try to get error details from response
+        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        println!("Error response: {}", error_text);
+        Err(format!("Failed to send message: {} - {}", status, error_text))
+    }
+}
+
+/// Send a message to an active opencode session and wait for full response
 #[command]
 pub async fn send_opencode_message(
     hostname: String,
@@ -176,6 +289,123 @@ pub async fn send_opencode_message(
     } else {
         Err(format!("Failed to send message: {}", response.status()))
     }
+}
+
+/// List messages in a session
+#[command]
+pub async fn list_session_messages(
+    hostname: String,
+    port: u16,
+    session_id: String,
+    limit: Option<u32>,
+) -> Result<Vec<Message>, String> {
+    let client = reqwest::Client::new();
+    let limit = limit.unwrap_or(50);
+    let messages_url = format!("http://{}:{}/session/{}/message?limit={}", hostname, port, session_id, limit);
+    
+    println!("Listing messages from: {}", messages_url);
+    
+    let response = client
+        .get(&messages_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to list messages: {}", e))?;
+    
+    if response.status().is_success() {
+        let messages: Vec<Message> = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse messages response: {}", e))?;
+        
+        println!("Got {} messages", messages.len());
+        Ok(messages)
+    } else {
+        Err(format!("Failed to list messages: {}", response.status()))
+    }
+}
+
+/// Stream events from the opencode server
+/// This uses Server-Sent Events (SSE) to receive real-time updates
+#[command]
+pub async fn stream_opencode_events(
+    hostname: String,
+    port: u16,
+    session_id: String,
+    window: tauri::Window,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let event_url = format!("http://{}:{}/event", hostname, port);
+    
+    println!("Connecting to event stream: {}", event_url);
+    
+    let response = client
+        .get(&event_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to event stream: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("Failed to connect to event stream: {}", response.status()));
+    }
+    
+    println!("Connected to event stream, waiting for events...");
+    
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+    
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes);
+                buffer.push_str(&text);
+                
+                // Process complete SSE events from buffer
+                while let Some(pos) = buffer.find("\n\n") {
+                    let event_text = buffer[..pos].to_string();
+                    buffer = buffer[pos + 2..].to_string();
+                    
+                    // Parse SSE event
+                    let mut event_name = String::new();
+                    let mut event_data = String::new();
+                    
+                    for line in event_text.lines() {
+                        if line.starts_with("event: ") {
+                            event_name = line[7..].to_string();
+                        } else if line.starts_with("data: ") {
+                            event_data = line[6..].to_string();
+                        }
+                    }
+                    
+                    if !event_data.is_empty() {
+                        println!("Received event: {} with data: {}", event_name, event_data);
+                        
+                        // Try to parse as JSON
+                        if let Ok(json_data) = serde_json::from_str::<serde_json::Value>(&event_data) {
+                            // Emit event to frontend
+                            let emit_result = window.emit("opencode-event", serde_json::json!({
+                                "session_id": &session_id,
+                                "event": event_name,
+                                "data": json_data
+                            }));
+                            
+                            if let Err(e) = emit_result {
+                                eprintln!("Failed to emit event: {}", e);
+                            } else {
+                                println!("Event emitted successfully");
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error reading event stream: {}", e);
+                break;
+            }
+        }
+    }
+    
+    println!("Event stream ended");
+    Ok(())
 }
 
 /// Check if the opencode server is healthy
