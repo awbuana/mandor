@@ -100,18 +100,18 @@ export function CenterPanel() {
     selectedWorktree,
     activeView,
     setActiveView,
-    getWorktreeFileSession,
+    getWorktreeSession,
     closeFile,
     setActiveFile,
     getOpencodeServer,
     startOpencodeServer,
+    addAgentMessage,
   } = useAppStore()
-  
+
   const [activeTab, setActiveTab] = useState<string>('codex')
   const [command, setCommand] = useState('')
   const [diffContent, setDiffContent] = useState<DiffLine[]>([])
   const [loadingDiff, setLoadingDiff] = useState(false)
-  const [messages, setMessages] = useState<Message[]>([])
   const [isSending, setIsSending] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
   const terminalRef = useRef<HTMLDivElement>(null)
@@ -133,11 +133,14 @@ export function CenterPanel() {
     }
   }, [currentServer])
 
-  // Get file session for selected worktree
-  const fileSession = selectedWorktree 
-    ? getWorktreeFileSession(selectedWorktree.path)
-    : { openFiles: [], activeFile: null }
-  const { openFiles, activeFile } = fileSession
+  // Get worktree session (includes files and agent messages)
+  const worktreeSession = selectedWorktree 
+    ? getWorktreeSession(selectedWorktree.path)
+    : { files: { openFiles: [], activeFile: null }, agent: { messages: [], opencodeSession: undefined } }
+  const { openFiles, activeFile } = worktreeSession.files
+  
+  // Get agent messages for selected worktree
+  const agentMessages = worktreeSession.agent.messages
 
   // Setup event listener for streaming
   useEffect(() => {
@@ -259,7 +262,7 @@ export function CenterPanel() {
   // Scroll to bottom of messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, streamingContent])
+  }, [agentMessages, streamingContent])
 
   const handleTabClick = async (tabId: string) => {
     setActiveTab(tabId)
@@ -315,7 +318,7 @@ export function CenterPanel() {
         content: 'Error: No active session. Please restart the server.',
         timestamp: new Date()
       }
-      setMessages(prev => [...prev, errorMessage])
+      addAgentMessage(selectedWorktree.path, errorMessage)
       return
     }
 
@@ -326,7 +329,7 @@ export function CenterPanel() {
       timestamp: new Date()
     }
 
-    setMessages(prev => [...prev, userMessage])
+    addAgentMessage(selectedWorktree.path, userMessage)
     setCommand('')
     setIsSending(true)
     setStreamingContent('')
@@ -359,7 +362,7 @@ export function CenterPanel() {
           content: textContent,
           timestamp: new Date()
         }
-        setMessages(prev => [...prev, assistantMessage])
+        addAgentMessage(selectedWorktree.path, assistantMessage)
       } else {
         const errorMessage: Message = {
           id: Date.now().toString(),
@@ -367,7 +370,7 @@ export function CenterPanel() {
           content: 'No text content in response.',
           timestamp: new Date()
         }
-        setMessages(prev => [...prev, errorMessage])
+        addAgentMessage(selectedWorktree.path, errorMessage)
       }
       setIsSending(false)
     } catch (error) {
@@ -378,7 +381,9 @@ export function CenterPanel() {
         content: `Error: ${error instanceof Error ? error.message : 'Failed to send message'}`,
         timestamp: new Date()
       }
-      setMessages(prev => [...prev, errorMessage])
+      if (selectedWorktree) {
+        addAgentMessage(selectedWorktree.path, errorMessage)
+      }
       setIsSending(false)
     }
   }
@@ -518,13 +523,13 @@ export function CenterPanel() {
             <div className="h-full flex flex-col">
               {/* Messages Area */}
               <div ref={terminalRef} className="flex-1 overflow-auto p-4 space-y-4">
-                {messages.length === 0 && !streamingContent ? (
+                {agentMessages.length === 0 && !streamingContent ? (
                   <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
                     <Command className="w-12 h-12 mb-3 opacity-50" />
                     <p className="text-sm">Send a message to start the conversation</p>
                   </div>
                 ) : (
-                  messages.map((message) => (
+                  agentMessages.map((message: Message) => (
                     <div
                       key={message.id}
                       className={cn(

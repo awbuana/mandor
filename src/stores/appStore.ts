@@ -12,9 +12,29 @@ export interface OpencodeServerInstance {
   error: string | null;
 }
 
-export interface WorktreeFileSession {
-  openFiles: string[];
-  activeFile: string | null;
+export interface AgentMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+}
+
+// Unified worktree session container - everything in CenterPanel is scoped here
+export interface WorktreeSession {
+  files: {
+    openFiles: string[];
+    activeFile: string | null;
+  };
+  agent: {
+    messages: AgentMessage[];
+    // Opencode session info scoped to this worktree
+    opencodeSession?: {
+      sessionId: string;
+      port: number;
+      hostname: string;
+      isRunning: boolean;
+    };
+  };
 }
 
 interface AppState {
@@ -33,8 +53,8 @@ interface AppState {
   // View State
   activeView: 'console' | 'changes';
 
-  // File Tabs (per worktree)
-  worktreeFileSessions: Record<string, WorktreeFileSession>;
+  // Worktree Sessions (scoped state for CenterPanel - files, agent messages, etc.)
+  worktreeSessions: Record<string, WorktreeSession>;
 
   // Opencode Servers (per worktree)
   opencodeServers: Record<string, OpencodeServerInstance>;
@@ -57,11 +77,18 @@ interface AppState {
 
   setActiveView: (view: 'console' | 'changes') => void;
 
-  // File Tab Actions (per worktree)
-  getWorktreeFileSession: (worktreePath: string) => WorktreeFileSession;
+  // Worktree Session Actions
+  getWorktreeSession: (worktreePath: string) => WorktreeSession;
+
+  // File Actions (per worktree)
   openFile: (worktreePath: string, file: string) => void;
   closeFile: (worktreePath: string, file: string) => void;
   setActiveFile: (worktreePath: string, file: string | null) => void;
+
+  // Agent Actions (per worktree)
+  addAgentMessage: (worktreePath: string, message: AgentMessage) => void;
+  clearAgentMessages: (worktreePath: string) => void;
+  setAgentOpencodeSession: (worktreePath: string, session: { sessionId: string; port: number; hostname: string; isRunning: boolean } | undefined) => void;
 
   // Opencode Server Actions
   getOpencodeServer: (worktreePath: string) => OpencodeServerInstance | undefined;
@@ -74,6 +101,17 @@ interface AppState {
   toggleTerminalPanel: () => void;
 }
 
+const createDefaultSession = (): WorktreeSession => ({
+  files: {
+    openFiles: [],
+    activeFile: null,
+  },
+  agent: {
+    messages: [],
+    opencodeSession: undefined,
+  },
+});
+
 export const useAppStore = create<AppState>((set, get) => ({
   currentRepoPath: null,
   worktrees: [],
@@ -82,7 +120,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   terminals: [],
   activeTerminalId: null,
   activeView: 'console',
-  worktreeFileSessions: {},
+  worktreeSessions: {},
   opencodeServers: {},
   sidebarCollapsed: false,
   terminalPanelHeight: 300,
@@ -112,26 +150,26 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setActiveView: (view) => set({ activeView: view }),
 
-  // File Tab Actions (per worktree)
-  getWorktreeFileSession: (worktreePath: string) => {
-    const session = get().worktreeFileSessions[worktreePath];
-    if (!session) {
-      return { openFiles: [], activeFile: null };
-    }
-    return session;
+  // Worktree Session Actions
+  getWorktreeSession: (worktreePath: string) => {
+    return get().worktreeSessions[worktreePath] || createDefaultSession();
   },
 
+  // File Actions (per worktree)
   openFile: (worktreePath: string, file: string) => set((state) => {
-    const currentSession = state.worktreeFileSessions[worktreePath] || { openFiles: [], activeFile: null };
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
 
     // If file is not already open, add it
-    if (!currentSession.openFiles.includes(file)) {
+    if (!currentSession.files.openFiles.includes(file)) {
       return {
-        worktreeFileSessions: {
-          ...state.worktreeFileSessions,
+        worktreeSessions: {
+          ...state.worktreeSessions,
           [worktreePath]: {
-            openFiles: [...currentSession.openFiles, file],
-            activeFile: file,
+            ...currentSession,
+            files: {
+              openFiles: [...currentSession.files.openFiles, file],
+              activeFile: file,
+            }
           }
         },
         activeView: 'changes'
@@ -140,11 +178,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // If already open, just make it active
     return {
-      worktreeFileSessions: {
-        ...state.worktreeFileSessions,
+      worktreeSessions: {
+        ...state.worktreeSessions,
         [worktreePath]: {
           ...currentSession,
-          activeFile: file,
+          files: {
+            ...currentSession.files,
+            activeFile: file,
+          }
         }
       },
       activeView: 'changes'
@@ -152,35 +193,93 @@ export const useAppStore = create<AppState>((set, get) => ({
   }),
 
   closeFile: (worktreePath: string, file: string) => set((state) => {
-    const currentSession = state.worktreeFileSessions[worktreePath] || { openFiles: [], activeFile: null };
-    const newOpenFiles = currentSession.openFiles.filter(f => f !== file);
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+    const newOpenFiles = currentSession.files.openFiles.filter(f => f !== file);
 
     // If closing the active file, switch to another file or null
-    let newActiveFile = currentSession.activeFile;
-    if (currentSession.activeFile === file) {
+    let newActiveFile = currentSession.files.activeFile;
+    if (currentSession.files.activeFile === file) {
       newActiveFile = newOpenFiles.length > 0 ? newOpenFiles[newOpenFiles.length - 1] : null;
     }
 
     return {
-      worktreeFileSessions: {
-        ...state.worktreeFileSessions,
+      worktreeSessions: {
+        ...state.worktreeSessions,
         [worktreePath]: {
-          openFiles: newOpenFiles,
-          activeFile: newActiveFile,
+          ...currentSession,
+          files: {
+            openFiles: newOpenFiles,
+            activeFile: newActiveFile,
+          }
         }
       }
     };
   }),
 
   setActiveFile: (worktreePath: string, file: string | null) => set((state) => {
-    const currentSession = state.worktreeFileSessions[worktreePath] || { openFiles: [], activeFile: null };
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
 
     return {
-      worktreeFileSessions: {
-        ...state.worktreeFileSessions,
+      worktreeSessions: {
+        ...state.worktreeSessions,
         [worktreePath]: {
           ...currentSession,
-          activeFile: file,
+          files: {
+            ...currentSession.files,
+            activeFile: file,
+          }
+        }
+      }
+    };
+  }),
+
+  // Agent Actions (per worktree)
+  addAgentMessage: (worktreePath: string, message: AgentMessage) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            messages: [...currentSession.agent.messages, message],
+          }
+        }
+      }
+    };
+  }),
+
+  clearAgentMessages: (worktreePath: string) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            messages: [],
+          }
+        }
+      }
+    };
+  }),
+
+  setAgentOpencodeSession: (worktreePath: string, session: { sessionId: string; port: number; hostname: string; isRunning: boolean } | undefined) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            opencodeSession: session,
+          }
         }
       }
     };
@@ -245,38 +344,73 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       console.log('Server started:', result)
 
-      set((state) => ({
-        opencodeServers: {
-          ...state.opencodeServers,
-          [worktreePath]: {
-            worktreePath,
-            worktreeName,
-            isRunning: true,
-            port: result.port,
-            hostname: result.hostname,
-            sessionId: result.session_id,
-            isInitializing: false,
-            error: null,
-          }
-        }
-      }));
+      const serverInstance: OpencodeServerInstance = {
+        worktreePath,
+        worktreeName,
+        isRunning: true,
+        port: result.port,
+        hostname: result.hostname,
+        sessionId: result.session_id,
+        isInitializing: false,
+        error: null,
+      };
+
+      set((state) => {
+        const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+        
+        return {
+          opencodeServers: {
+            ...state.opencodeServers,
+            [worktreePath]: serverInstance,
+          },
+          worktreeSessions: {
+            ...state.worktreeSessions,
+            [worktreePath]: {
+              ...currentSession,
+              agent: {
+                ...currentSession.agent,
+                opencodeSession: {
+                  sessionId: result.session_id,
+                  port: result.port,
+                  hostname: result.hostname,
+                  isRunning: true,
+                },
+              },
+            },
+          },
+        };
+      });
     } catch (error) {
       console.error('Failed to start opencode server:', error);
-      set((state) => ({
-        opencodeServers: {
-          ...state.opencodeServers,
-          [worktreePath]: {
-            worktreePath,
-            worktreeName,
-            isRunning: false,
-            port: null,
-            hostname: '127.0.0.1',
-            sessionId: null,
-            isInitializing: false,
-            error: error instanceof Error ? error.message : 'Failed to start server',
-          }
-        }
-      }));
+      set((state) => {
+        const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+        
+        return {
+          opencodeServers: {
+            ...state.opencodeServers,
+            [worktreePath]: {
+              worktreePath,
+              worktreeName,
+              isRunning: false,
+              port: null,
+              hostname: '127.0.0.1',
+              sessionId: null,
+              isInitializing: false,
+              error: error instanceof Error ? error.message : 'Failed to start server',
+            }
+          },
+          worktreeSessions: {
+            ...state.worktreeSessions,
+            [worktreePath]: {
+              ...currentSession,
+              agent: {
+                ...currentSession.agent,
+                opencodeSession: undefined,
+              },
+            },
+          },
+        };
+      });
     }
   },
 
@@ -298,18 +432,32 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.error('Failed to stop opencode server:', error);
     }
 
-    set((state) => ({
-      opencodeServers: {
-        ...state.opencodeServers,
-        [worktreePath]: {
-          ...state.opencodeServers[worktreePath],
-          isRunning: false,
-          port: null,
-          sessionId: null,
-          error: null,
-        }
-      }
-    }));
+    set((state) => {
+      const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+      
+      return {
+        opencodeServers: {
+          ...state.opencodeServers,
+          [worktreePath]: {
+            ...state.opencodeServers[worktreePath],
+            isRunning: false,
+            port: null,
+            sessionId: null,
+            error: null,
+          }
+        },
+        worktreeSessions: {
+          ...state.worktreeSessions,
+          [worktreePath]: {
+            ...currentSession,
+            agent: {
+              ...currentSession.agent,
+              opencodeSession: undefined,
+            },
+          },
+        },
+      };
+    });
   },
 
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
