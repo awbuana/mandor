@@ -667,7 +667,7 @@ export function CenterPanel() {
                       }
                     }
                   }}
-                  className="bg-[#1a1a1a] text-[#e0e0e0] text-xs px-3 py-1.5 rounded border border-[#2a2a2a] focus:border-[#d97757] outline-none"
+                    className="bg-[#111111] text-[#9b9b9b] text-xs px-3 py-1.5 rounded-sm border border-[#1a1a1a] focus:border-[#5b5b5b] outline-none font-mono uppercase tracking-wider appearance-none cursor-pointer hover:border-[#3a3a3a] transition-colors"
                 >
                   <option value="">Select provider...</option>
                   {availableProviders.map((provider) => (
@@ -689,7 +689,7 @@ export function CenterPanel() {
                         setAgentSelectedModel(selectedWorktree.path, e.target.value || undefined)
                       }
                     }}
-                    className="bg-[#1a1a1a] text-[#e0e0e0] text-xs px-3 py-1.5 rounded border border-[#2a2a2a] focus:border-[#d97757] outline-none"
+                  className="bg-[#111111] text-[#9b9b9b] text-xs px-3 py-1.5 rounded-sm border border-[#1a1a1a] focus:border-[#5b5b5b] outline-none font-mono uppercase tracking-wider appearance-none cursor-pointer hover:border-[#3a3a3a] transition-colors"
                   >
                     {selectedProviderId && availableProviders
                       .find(p => p.id === selectedProviderId)
