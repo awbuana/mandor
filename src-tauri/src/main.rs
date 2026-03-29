@@ -1,0 +1,42 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod git;
+mod worktree;
+mod terminal;
+
+use tauri::Manager;
+
+#[tauri::command]
+async fn open_app_window(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn main() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_process::init())
+        .invoke_handler(tauri::generate_handler![
+            open_app_window,
+            git::list_worktrees,
+            git::create_worktree,
+            git::delete_worktree,
+            git::get_worktree_status,
+            git::get_diff,
+            git::stage_file,
+            git::unstage_file,
+            git::discard_changes,
+            git::commit,
+            git::get_branches,
+            worktree::open_in_editor,
+            worktree::get_worktree_info,
+            terminal::spawn_terminal,
+            terminal::write_to_terminal,
+            terminal::resize_terminal,
+            terminal::kill_terminal,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

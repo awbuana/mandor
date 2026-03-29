@@ -1,0 +1,322 @@
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::process::Command;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Worktree {
+    pub path: String,
+    pub head: String,
+    pub branch: Option<String>,
+    pub is_main: bool,
+    pub is_bare: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FileStatus {
+    pub path: String,
+    pub status: String,
+    pub staged: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WorktreeStatus {
+    pub branch: String,
+    pub commit: String,
+    pub ahead: i32,
+    pub behind: i32,
+    pub modified: Vec<FileStatus>,
+    pub staged: Vec<FileStatus>,
+    pub untracked: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DiffLine {
+    pub line_number: i32,
+    pub content: String,
+    pub change_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FileDiff {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub lines_added: i32,
+    pub lines_deleted: i32,
+    pub hunks: Vec<DiffHunk>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DiffHunk {
+    pub old_start: i32,
+    pub old_lines: i32,
+    pub new_start: i32,
+    pub new_lines: i32,
+    pub lines: Vec<DiffLine>,
+}
+
+#[tauri::command]
+pub fn list_worktrees(repo_path: String) -> Result<Vec<Worktree>, String> {
+    let output = Command::new("git")
+        .args(&["-C", &repo_path, "worktree", "list", "--porcelain"])
+        .output()
+        .map_err(|e| format!("Failed to list worktrees: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut worktrees = Vec::new();
+    let mut current_worktree: Option<Worktree> = None;
+
+    for line in stdout.lines() {
+        if line.starts_with("worktree ") {
+            if let Some(wt) = current_worktree.take() {
+                worktrees.push(wt);
+            }
+            current_worktree = Some(Worktree {
+                path: line[9..].to_string(),
+                head: String::new(),
+                branch: None,
+                is_main: false,
+                is_bare: false,
+            });
+        } else if let Some(ref mut wt) = current_worktree {
+            if line.starts_with("HEAD ") {
+                wt.head = line[5..].to_string();
+            } else if line.starts_with("branch ") {
+                wt.branch = Some(line[7..].to_string());
+            } else if line == "bare" {
+                wt.is_bare = true;
+            } else if line == "detached" {
+                wt.branch = None;
+            }
+        }
+    }
+
+    if let Some(wt) = current_worktree {
+        worktrees.push(wt);
+    }
+
+    if let Some(first) = worktrees.first_mut() {
+        first.is_main = true;
+    }
+
+    Ok(worktrees)
+}
+
+#[tauri::command]
+pub fn create_worktree(
+    repo_path: String,
+    branch: String,
+    path: String,
+) -> Result<Worktree, String> {
+    let worktree_path = PathBuf::from(&repo_path).join(&path);
+    
+    let output = Command::new("git")
+        .args(&[
+            "-C", &repo_path,
+            "worktree", "add",
+            worktree_path.to_str().unwrap(),
+            &branch,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to create worktree: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    Ok(Worktree {
+        path: worktree_path.to_string_lossy().to_string(),
+        head: String::new(),
+        branch: Some(branch),
+        is_main: false,
+        is_bare: false,
+    })
+}
+
+#[tauri::command]
+pub fn delete_worktree(repo_path: String, worktree_path: String) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(&["-C", &repo_path, "worktree", "remove", "-f", &worktree_path])
+        .output()
+        .map_err(|e| format!("Failed to delete worktree: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_worktree_status(worktree_path: String) -> Result<WorktreeStatus, String> {
+    let branch_output = Command::new("git")
+        .args(&["-C", &worktree_path, "rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .map_err(|e| format!("Failed to get branch: {}", e))?;
+
+    let branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+
+    let commit_output = Command::new("git")
+        .args(&["-C", &worktree_path, "rev-parse", "--short", "HEAD"])
+        .output()
+        .map_err(|e| format!("Failed to get commit: {}", e))?;
+
+    let commit = String::from_utf8_lossy(&commit_output.stdout).trim().to_string();
+
+    let status_output = Command::new("git")
+        .args(&["-C", &worktree_path, "status", "--porcelain"])
+        .output()
+        .map_err(|e| format!("Failed to get status: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&status_output.stdout);
+    let mut modified = Vec::new();
+    let mut staged = Vec::new();
+    let mut untracked = Vec::new();
+
+    for line in stdout.lines() {
+        if line.len() < 3 {
+            continue;
+        }
+
+        let index_status = line.chars().nth(0).unwrap();
+        let worktree_status = line.chars().nth(1).unwrap();
+        let file_path = line[3..].to_string();
+
+        match (index_status, worktree_status) {
+            ('?', '?') => untracked.push(file_path),
+            (' ', m) if m != ' ' => modified.push(FileStatus {
+                path: file_path,
+                status: worktree_status.to_string(),
+                staged: false,
+            }),
+            (m, ' ') if m != ' ' => staged.push(FileStatus {
+                path: file_path,
+                status: index_status.to_string(),
+                staged: true,
+            }),
+            (m, w) if m != ' ' && w != ' ' => {
+                staged.push(FileStatus {
+                    path: file_path.clone(),
+                    status: index_status.to_string(),
+                    staged: true,
+                });
+                modified.push(FileStatus {
+                    path: file_path,
+                    status: worktree_status.to_string(),
+                    staged: false,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(WorktreeStatus {
+        branch,
+        commit,
+        ahead: 0,
+        behind: 0,
+        modified,
+        staged,
+        untracked,
+    })
+}
+
+#[tauri::command]
+pub fn get_diff(worktree_path: String, file_path: Option<String>) -> Result<String, String> {
+    let mut args = vec!["-C", &worktree_path, "diff"];
+    
+    if let Some(file) = file_path {
+        args.push("--");
+        args.push(&file);
+    }
+
+    let output = Command::new("git")
+        .args(&args)
+        .output()
+        .map_err(|e| format!("Failed to get diff: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[tauri::command]
+pub fn stage_file(worktree_path: String, file_path: String) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(&["-C", &worktree_path, "add", &file_path])
+        .output()
+        .map_err(|e| format!("Failed to stage file: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn unstage_file(worktree_path: String, file_path: String) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(&["-C", &worktree_path, "reset", "HEAD", &file_path])
+        .output()
+        .map_err(|e| format!("Failed to unstage file: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn discard_changes(worktree_path: String, file_path: String) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(&["-C", &worktree_path, "checkout", "--", &file_path])
+        .output()
+        .map_err(|e| format!("Failed to discard changes: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn commit(worktree_path: String, message: String) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(&["-C", &worktree_path, "commit", "-m", &message])
+        .output()
+        .map_err(|e| format!("Failed to commit: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[tauri::command]
+pub fn get_branches(repo_path: String) -> Result<Vec<String>, String> {
+    let output = Command::new("git")
+        .args(&["-C", &repo_path, "branch", "-a", "--format=%(refname:short)"])
+        .output()
+        .map_err(|e| format!("Failed to list branches: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let branches: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    Ok(branches)
+}
