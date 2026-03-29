@@ -1,6 +1,17 @@
 import { create } from 'zustand';
 import { Worktree, TerminalSession, WorktreeStatus } from '@/types';
 
+export interface OpencodeServerInstance {
+  worktreePath: string;
+  worktreeName: string;
+  isRunning: boolean;
+  port: number | null;
+  hostname: string;
+  sessionId: string | null;
+  isInitializing: boolean;
+  error: string | null;
+}
+
 interface AppState {
   // Repository
   currentRepoPath: string | null;
@@ -21,6 +32,9 @@ interface AppState {
   openFiles: string[];
   activeFile: string | null;
 
+  // Opencode Servers (per worktree)
+  opencodeServers: Record<string, OpencodeServerInstance>;
+
   // UI State
   sidebarCollapsed: boolean;
   terminalPanelHeight: number;
@@ -38,18 +52,26 @@ interface AppState {
   setActiveTerminal: (id: string | null) => void;
 
   setActiveView: (view: 'console' | 'changes') => void;
-  
+
   // File Tab Actions
   openFile: (file: string) => void;
   closeFile: (file: string) => void;
   setActiveFile: (file: string | null) => void;
+
+  // Opencode Server Actions
+  getOpencodeServer: (worktreePath: string) => OpencodeServerInstance | undefined;
+  setOpencodeServer: (worktreePath: string, state: Partial<OpencodeServerInstance>) => void;
+  startOpencodeServer: (worktreePath: string, worktreeName: string) => Promise<void>;
+  stopOpencodeServer: (worktreePath: string) => Promise<void>;
 
   toggleSidebar: () => void;
   setTerminalPanelHeight: (height: number) => void;
   toggleTerminalPanel: () => void;
 }
 
-export const useAppStore = create<AppState>((set) => ({
+
+
+export const useAppStore = create<AppState>((set, get) => ({
   currentRepoPath: null,
   worktrees: [],
   selectedWorktree: null,
@@ -59,14 +81,15 @@ export const useAppStore = create<AppState>((set) => ({
   activeView: 'console',
   openFiles: [],
   activeFile: null,
+  opencodeServers: {},
   sidebarCollapsed: false,
   terminalPanelHeight: 300,
   showTerminalPanel: true,
 
   setCurrentRepoPath: (path) => set({ currentRepoPath: path }),
   setWorktrees: (worktrees) => set({ worktrees }),
-  addWorktree: (worktree) => set((state) => ({ 
-    worktrees: [...state.worktrees, worktree] 
+  addWorktree: (worktree) => set((state) => ({
+    worktrees: [...state.worktrees, worktree]
   })),
   setSelectedWorktree: (worktree) => set({ selectedWorktree: worktree }),
   setWorktreeStatus: (path, status) => set((state) => ({
@@ -86,7 +109,7 @@ export const useAppStore = create<AppState>((set) => ({
   setActiveTerminal: (id) => set({ activeTerminalId: id }),
 
   setActiveView: (view) => set({ activeView: view }),
-  
+
   // File Tab Actions
   openFile: (file) => set((state) => {
     // If file is not already open, add it
@@ -103,7 +126,7 @@ export const useAppStore = create<AppState>((set) => ({
       activeView: 'changes'
     };
   }),
-  
+
   closeFile: (file) => set((state) => {
     const newOpenFiles = state.openFiles.filter(f => f !== file);
     // If closing the active file, switch to another file or null
@@ -116,8 +139,132 @@ export const useAppStore = create<AppState>((set) => ({
       activeFile: newActiveFile
     };
   }),
-  
+
   setActiveFile: (file) => set({ activeFile: file }),
+
+  // Opencode Server Actions
+  getOpencodeServer: (worktreePath: string) => {
+    return get().opencodeServers[worktreePath];
+  },
+
+  setOpencodeServer: (worktreePath: string, serverState) => set((state) => ({
+    opencodeServers: {
+      ...state.opencodeServers,
+      [worktreePath]: {
+        ...state.opencodeServers[worktreePath],
+        ...serverState,
+        worktreePath,
+      } as OpencodeServerInstance
+    }
+  })),
+
+  startOpencodeServer: async (worktreePath: string, worktreeName: string) => {
+    const { opencodeServers } = get();
+    const existingServer = opencodeServers[worktreePath];
+
+    // Don't start if already running or initializing
+    if (existingServer?.isRunning || existingServer?.isInitializing) {
+      return;
+    }
+
+    // Initialize server state
+    set((state) => ({
+      opencodeServers: {
+        ...state.opencodeServers,
+        [worktreePath]: {
+          worktreePath,
+          worktreeName,
+          isRunning: false,
+          port: null,
+          hostname: '127.0.0.1',
+          sessionId: null,
+          isInitializing: true,
+          error: null,
+        }
+      }
+    }));
+
+    try {
+      // Import invoke dynamically to avoid issues
+      const { invoke } = await import('@tauri-apps/api/core');
+
+      // Start the opencode server via Tauri command
+      // Use a different port for each worktree (base port 4096 + worktree index)
+      const worktrees = get().worktrees;
+      const worktreeIndex = worktrees.findIndex(w => w.path === worktreePath);
+      const port = 4096 + (worktreeIndex >= 0 ? worktreeIndex : 0);
+
+      const result = await invoke('start_opencode_server', {
+        worktreePath,
+        port,
+      }) as { port: number; hostname: string; sessionId: string };
+
+      set((state) => ({
+        opencodeServers: {
+          ...state.opencodeServers,
+          [worktreePath]: {
+            worktreePath,
+            worktreeName,
+            isRunning: true,
+            port: result.port,
+            hostname: result.hostname,
+            sessionId: result.sessionId,
+            isInitializing: false,
+            error: null,
+          }
+        }
+      }));
+    } catch (error) {
+      console.error('Failed to start opencode server:', error);
+      set((state) => ({
+        opencodeServers: {
+          ...state.opencodeServers,
+          [worktreePath]: {
+            worktreePath,
+            worktreeName,
+            isRunning: false,
+            port: null,
+            hostname: '127.0.0.1',
+            sessionId: null,
+            isInitializing: false,
+            error: error instanceof Error ? error.message : 'Failed to start server',
+          }
+        }
+      }));
+    }
+  },
+
+  stopOpencodeServer: async (worktreePath: string) => {
+    const { opencodeServers } = get();
+    const server = opencodeServers[worktreePath];
+    
+    if (!server?.isRunning || !server.port) {
+      return;
+    }
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('stop_opencode_server', {
+        hostname: server.hostname,
+        port: server.port,
+      });
+    } catch (error) {
+      console.error('Failed to stop opencode server:', error);
+    }
+
+    set((state) => ({
+      opencodeServers: {
+        ...state.opencodeServers,
+        [worktreePath]: {
+          ...state.opencodeServers[worktreePath],
+          isRunning: false,
+          port: null,
+          sessionId: null,
+          error: null,
+        }
+      }
+    }));
+  },
 
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   setTerminalPanelHeight: (height) => set({ terminalPanelHeight: height }),

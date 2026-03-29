@@ -3,6 +3,7 @@
 mod git;
 mod worktree;
 mod terminal;
+mod opencode;
 
 use tauri::Manager;
 
@@ -39,6 +40,10 @@ fn main() {
             terminal::write_to_terminal,
             terminal::resize_terminal,
             terminal::kill_terminal,
+            opencode::start_opencode_server,
+            opencode::send_opencode_message,
+            opencode::check_opencode_health,
+            opencode::stop_opencode_server,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

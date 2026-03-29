@@ -1,8 +1,8 @@
 import { useAppStore } from '@/stores/appStore'
 import { Worktree } from '@/types'
 import { motion } from 'framer-motion'
-import { 
-  GitBranch, 
+import {
+  GitBranch,
   Plus,
   Globe,
   Trash
@@ -11,6 +11,57 @@ import { cn } from '@/lib/utils'
 import { useState, useEffect } from 'react'
 import { CreateWorktreeModal } from '@/components/worktree/CreateWorktreeModal'
 import { invoke } from '@tauri-apps/api/core'
+
+interface DiffStats {
+  files_changed: number
+  insertions: number
+  deletions: number
+}
+
+// Ports Panel Component
+function PortsPanel() {
+  const { opencodeServers } = useAppStore()
+
+  // Get all running servers
+  const runningServers = Object.values(opencodeServers).filter(s => s.isRunning && s.port)
+
+  return (
+    <div className="border-t border-[#1a1a1a]">
+      <div className="px-4 py-2 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Globe className="w-4 h-4 text-[#6b6b6b]" />
+          <span className="text-xs font-medium text-[#6b6b6b] uppercase tracking-wider">Ports</span>
+        </div>
+        <span className="text-xs text-[#5b5b5b]">{runningServers.length}</span>
+      </div>
+
+      <div className="px-2 pb-2">
+        {runningServers.length > 0 ? (
+          <div className="space-y-1">
+            {runningServers.map((server) => (
+              <div
+                key={server.worktreePath}
+                className="flex items-center gap-2 px-3 py-1.5 rounded hover:bg-[#111111]"
+              >
+                <span className="w-2 h-2 rounded-full bg-[#4ade80]" />
+                <span className="text-xs font-mono text-[#9b9b9b]">
+                  {server.hostname}:{server.port}
+                </span>
+                <span className="text-xs text-[#6b6b6b] truncate flex-1">
+                  {server.worktreeName}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="px-3 py-2 text-xs text-[#5b5b5b] text-center">
+            No forwarded ports
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 interface DiffStats {
   files_changed: number
@@ -233,21 +284,7 @@ export function Sidebar() {
       </div>
 
       {/* Ports Section */}
-      <div className="border-t border-[#1a1a1a]">
-        <div className="px-4 py-2 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Globe className="w-4 h-4 text-[#6b6b6b]" />
-            <span className="text-xs font-medium text-[#6b6b6b] uppercase tracking-wider">Ports</span>
-          </div>
-          <span className="text-xs text-[#5b5b5b]">0</span>
-        </div>
-        
-        <div className="px-2 pb-2">
-          <div className="px-3 py-2 text-xs text-[#5b5b5b] text-center">
-            No forwarded ports
-          </div>
-        </div>
-      </div>
+      <PortsPanel />
       </motion.aside>
 
       {/* Create Worktree Modal */}

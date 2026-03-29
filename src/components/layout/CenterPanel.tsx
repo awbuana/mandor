@@ -3,18 +3,14 @@ import { cn } from '@/lib/utils'
 import { motion } from 'framer-motion'
 import { 
   X,
-  Plus,
   Terminal,
   Command,
   Robot,
-  Sparkle,
-  Diamond,
-  Cursor,
-  FileCode
+  FileCode,
+  Play
 } from '@phosphor-icons/react'
 import { AgentType } from '@/types'
 import { useState, useRef, useEffect } from 'react'
-import { TerminalInstance } from '@/components/terminal/TerminalInstance'
 import { invoke } from '@tauri-apps/api/core'
 
 type AgentTab = {
@@ -32,39 +28,31 @@ interface DiffLine {
   newLine?: number
 }
 
+interface Message {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: Date
+}
+
 const AGENT_TABS: AgentTab[] = [
-  { id: 'claude', type: 'claude', name: 'claude', icon: <Sparkle className="w-4 h-4" />, color: '#d97757' },
-  { id: 'codex', type: 'opencode', name: 'codex', icon: <Command className="w-4 h-4" />, color: '#9b9b9b' },
-  { id: 'gemini', type: 'claude', name: 'gemini', icon: <Diamond className="w-4 h-4" />, color: '#6a9bcc' },
-  { id: 'cursor', type: 'cursor', name: 'cursor', icon: <Cursor className="w-4 h-4" />, color: '#9b9b9b' },
+  { id: 'codex', type: 'opencode', name: 'opencode', icon: <Command className="w-4 h-4" />, color: '#9b9b9b' },
 ]
 
 // Mock agent info
 const AGENT_INFO: Record<string, { version: string; model: string; subtitle: string; path: string }> = {
-  claude: { 
-    version: 'v2.0.74', 
-    model: 'Opus 4.5 · Claude Max', 
-    subtitle: 'Claude Code',
-    path: '~/.mandor/worktrees/mandor/main'
-  },
   codex: { 
     version: 'v1.0.0', 
-    model: 'GPT-4 · OpenCode', 
+    model: 'AI Assistant', 
     subtitle: 'OpenCode Agent',
     path: '~/.mandor/worktrees/mandor/main'
   },
-  gemini: { 
-    version: 'v1.0.0', 
-    model: 'Gemini Pro · Google', 
-    subtitle: 'Gemini Code',
-    path: '~/.mandor/worktrees/mandor/main'
-  },
-  cursor: { 
-    version: 'v0.1.0', 
-    model: 'Claude 3.5 · Cursor', 
-    subtitle: 'Cursor Agent',
-    path: '~/.mandor/worktrees/mandor/main'
-  },
+}
+
+// Get worktree name from path
+const getWorktreeNameFromPath = (path: string): string => {
+  const parts = path.split('/')
+  return parts[parts.length - 1] || path
 }
 
 export function CenterPanel() {
@@ -79,14 +67,22 @@ export function CenterPanel() {
     openFiles,
     activeFile,
     closeFile,
-    setActiveFile
+    setActiveFile,
+    getOpencodeServer,
+    startOpencodeServer,
   } = useAppStore()
   
-  const [activeTab, setActiveTab] = useState<string>('claude')
+  const [activeTab, setActiveTab] = useState<string>('codex')
   const [command, setCommand] = useState('')
   const [diffContent, setDiffContent] = useState<DiffLine[]>([])
   const [loadingDiff, setLoadingDiff] = useState(false)
+  const [messages, setMessages] = useState<Message[]>([])
+  const [isSending, setIsSending] = useState(false)
   const terminalRef = useRef<HTMLDivElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // Get server for selected worktree
+  const currentServer = selectedWorktree ? getOpencodeServer(selectedWorktree.path) : undefined
 
   // Parse diff from string
   const parseDiff = (diff: string): DiffLine[] => {
@@ -143,8 +139,22 @@ export function CenterPanel() {
     loadDiff()
   }, [activeFile, selectedWorktree, activeView])
 
-  const handleTabClick = (tabId: string) => {
+  // Scroll to bottom of messages
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  const handleTabClick = async (tabId: string) => {
     setActiveTab(tabId)
+    
+    // If opencode tab and server not running, start it
+    if (tabId === 'codex' && selectedWorktree) {
+      const server = getOpencodeServer(selectedWorktree.path)
+      if (!server?.isRunning && !server?.isInitializing) {
+        const worktreeName = getWorktreeNameFromPath(selectedWorktree.path)
+        await startOpencodeServer(selectedWorktree.path, worktreeName)
+      }
+    }
     
     // Check if terminal exists for this agent
     const existingTerminal = terminals.find(t => t.agent_type === tabId)
@@ -173,16 +183,58 @@ export function CenterPanel() {
     }
   }
 
-  const handleSubmitCommand = (e: React.FormEvent) => {
+  const handleSubmitCommand = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (command.trim()) {
-      // In real implementation, this would send to terminal
-      setCommand('')
+    if (!command.trim() || !selectedWorktree || !currentServer?.isRunning) return
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: command.trim(),
+      timestamp: new Date()
+    }
+
+    setMessages(prev => [...prev, userMessage])
+    setCommand('')
+    setIsSending(true)
+
+    try {
+      const response = await invoke('send_opencode_message', {
+        hostname: currentServer.hostname,
+        port: currentServer.port,
+        sessionId: currentServer.sessionId,
+        message: userMessage.content
+      }) as { info: { id: string }, parts: Array<{ type: string; text?: string }> }
+
+      // Extract text content from response parts
+      const assistantContent = response.parts
+        .filter(part => part.type === 'text')
+        .map(part => part.text)
+        .join('\n')
+
+      const assistantMessage: Message = {
+        id: response.info.id || Date.now().toString(),
+        role: 'assistant',
+        content: assistantContent || 'No response',
+        timestamp: new Date()
+      }
+
+      setMessages(prev => [...prev, assistantMessage])
+    } catch (error) {
+      console.error('Failed to send message:', error)
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: `Error: ${error instanceof Error ? error.message : 'Failed to send message'}`,
+        timestamp: new Date()
+      }
+      setMessages(prev => [...prev, errorMessage])
+    } finally {
+      setIsSending(false)
     }
   }
 
   const activeAgent = AGENT_INFO[activeTab]
-  const hasTerminal = terminals.some(t => t.agent_type === activeTab)
 
   // Get file extension for icon
   const getFileExtension = (path: string) => {
@@ -239,10 +291,6 @@ export function CenterPanel() {
             </button>
           )
         })}
-        
-        <button className="flex items-center gap-1 px-3 py-2 text-[#6b6b6b] hover:text-[#9b9b9b] transition-colors">
-          <Plus className="w-4 h-4" />
-        </button>
       </div>
 
       {/* View Tabs */}
@@ -284,17 +332,37 @@ export function CenterPanel() {
               <Robot className="w-12 h-12 mb-3 opacity-50" />
               <p className="text-sm">Select a worktree to start an agent</p>
             </div>
-          ) : !hasTerminal ? (
+          ) : !currentServer?.isRunning ? (
             <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
               <div className="text-center space-y-4">
                 <div className="w-20 h-20 mx-auto bg-[#1a1a1a] rounded-lg flex items-center justify-center">
-                  <Sparkle className="w-10 h-10 text-[#d97757]" />
+                  {currentServer?.isInitializing ? (
+                    <div className="w-10 h-10 border-2 border-[#2a2a2a] border-t-[#9b9b9b] rounded-full animate-spin" />
+                  ) : (
+                    <Command className="w-10 h-10 text-[#9b9b9b]" />
+                  )}
                 </div>
                 <div>
                   <p className="text-lg font-medium text-[#9b9b9b]">{activeAgent.subtitle}</p>
-                  <p className="text-sm text-[#6b6b6b]">{activeAgent.model}</p>
+                  <p className="text-sm text-[#6b6b6b]">
+                    {currentServer?.isInitializing ? 'Starting server...' : activeAgent.model}
+                  </p>
                 </div>
-                <p className="text-xs text-[#5b5b5b] font-mono">{activeAgent.path}</p>
+                {currentServer?.error && (
+                  <p className="text-xs text-[#f87171]">{currentServer.error}</p>
+                )}
+                {!currentServer?.isInitializing && (
+                  <button
+                    onClick={() => {
+                      const worktreeName = getWorktreeNameFromPath(selectedWorktree.path)
+                      startOpencodeServer(selectedWorktree.path, worktreeName)
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 bg-[#1a1a1a] hover:bg-[#2a2a2a] rounded-md text-sm text-[#9b9b9b] transition-colors"
+                  >
+                    <Play className="w-4 h-4" />
+                    <span>Start Server</span>
+                  </button>
+                )}
               </div>
             </div>
           ) : (
@@ -302,7 +370,7 @@ export function CenterPanel() {
               {/* Agent Info Banner */}
               <div className="px-4 py-3 border-b border-[#1a1a1a] flex items-center gap-4">
                 <div className="w-10 h-10 bg-[#1a1a1a] rounded-lg flex items-center justify-center">
-                  <Sparkle className="w-5 h-5 text-[#d97757]" />
+                  <Command className="w-5 h-5 text-[#9b9b9b]" />
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
@@ -314,13 +382,54 @@ export function CenterPanel() {
                 <p className="text-xs text-[#5b5b5b] font-mono">{activeAgent.path}</p>
               </div>
 
-              {/* Terminal Output */}
-              <div ref={terminalRef} className="flex-1 overflow-auto p-4 font-mono text-sm">
-                {terminals
-                  .filter(t => t.agent_type === activeTab)
-                  .map(terminal => (
-                    <TerminalInstance key={terminal.id} terminal={terminal} />
-                  ))}
+              {/* Messages Area */}
+              <div ref={terminalRef} className="flex-1 overflow-auto p-4 space-y-4">
+                {messages.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
+                    <Command className="w-12 h-12 mb-3 opacity-50" />
+                    <p className="text-sm">Send a message to start the conversation</p>
+                  </div>
+                ) : (
+                  messages.map((message) => (
+                    <div
+                      key={message.id}
+                      className={cn(
+                        "flex gap-3",
+                        message.role === 'user' ? "justify-end" : "justify-start"
+                      )}
+                    >
+                      {message.role === 'assistant' && (
+                        <div className="w-8 h-8 bg-[#1a1a1a] rounded-lg flex items-center justify-center flex-shrink-0">
+                          <Command className="w-4 h-4 text-[#9b9b9b]" />
+                        </div>
+                      )}
+                      <div
+                        className={cn(
+                          "max-w-[80%] px-4 py-2 rounded-lg text-sm",
+                          message.role === 'user'
+                            ? "bg-[#d97757] text-white"
+                            : "bg-[#1a1a1a] text-[#e0e0e0]"
+                        )}
+                      >
+                        <p className="whitespace-pre-wrap">{message.content}</p>
+                        <span className="text-xs opacity-50 mt-1 block">
+                          {message.timestamp.toLocaleTimeString()}
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                )}
+                {isSending && (
+                  <div className="flex gap-3 justify-start">
+                    <div className="w-8 h-8 bg-[#1a1a1a] rounded-lg flex items-center justify-center flex-shrink-0">
+                      <Command className="w-4 h-4 text-[#9b9b9b]" />
+                    </div>
+                    <div className="bg-[#1a1a1a] px-4 py-2 rounded-lg">
+                      <div className="w-4 h-4 border-2 border-[#2a2a2a] border-t-[#9b9b9b] rounded-full animate-spin" />
+                    </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
               </div>
             </div>
           )
@@ -454,29 +563,35 @@ export function CenterPanel() {
         )}
       </div>
 
-      {/* Command Input - Only show in console view */}
-      {activeView === 'console' && (
-        <div className="p-4 border-t border-[#1a1a1a]">
-          <form onSubmit={handleSubmitCommand} className="relative">
-            <div className="flex items-center gap-2 px-4 py-3 bg-[#111111] border border-[#1a1a1a] rounded-lg focus-within:border-[#2a2a2a]">
-              <span className="text-[#6b6b6b]">›</span>
-              <input
-                type="text"
-                value={command}
-                onChange={(e) => setCommand(e.target.value)}
-                placeholder={`Type a task for ${activeTab}...`}
-                className="flex-1 bg-transparent text-[#e0e0e0] placeholder-[#5b5b5b] outline-none text-sm"
-                disabled={!selectedWorktree}
-              />
-              <button
-                type="submit"
-                disabled={!command.trim() || !selectedWorktree}
-                className="p-1 bg-[#2a2a2a] hover:bg-[#3a3a3a] disabled:opacity-50 disabled:cursor-not-allowed rounded text-[#9b9b9b] transition-colors"
-              >
-                <Command className="w-4 h-4" />
-              </button>
-            </div>
-          </form>
+      {/* Bottom Panel - Command Input */}
+      {activeView === 'console' && selectedWorktree && currentServer?.isRunning && (
+        <div className="border-t border-[#1a1a1a] p-4">
+            <div className="p-4">
+              <form onSubmit={handleSubmitCommand} className="relative">
+                <div className="flex items-center gap-2 px-4 py-3 bg-[#111111] border border-[#1a1a1a] rounded-lg focus-within:border-[#2a2a2a]">
+                  <span className="text-[#6b6b6b]">›</span>
+                  <input
+                    type="text"
+                    value={command}
+                    onChange={(e) => setCommand(e.target.value)}
+                    placeholder="Type a message to opencode..."
+                    className="flex-1 bg-transparent text-[#e0e0e0] placeholder-[#5b5b5b] outline-none text-sm"
+                    disabled={!currentServer?.isRunning || isSending}
+                  />
+                  <button
+                    type="submit"
+                    disabled={!command.trim() || !currentServer?.isRunning || isSending}
+                    className="p-1 bg-[#2a2a2a] hover:bg-[#3a3a3a] disabled:opacity-50 disabled:cursor-not-allowed rounded text-[#9b9b9b] transition-colors"
+                  >
+                    {isSending ? (
+                      <div className="w-4 h-4 border-2 border-[#2a2a2a] border-t-[#9b9b9b] rounded-full animate-spin" />
+                    ) : (
+                      <Command className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>
