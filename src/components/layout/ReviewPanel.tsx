@@ -15,7 +15,7 @@ import {
 import { useState, useEffect, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { FileStatus } from '@/types'
-import { FileDiffViewer } from '@/components/diff/FileDiffViewer'
+
 
 interface FileChange {
   id: string
@@ -116,12 +116,11 @@ function buildFileTree(files: { path: string; status: FileChange['status']; file
 }
 
 export function ReviewPanel() {
-  const { selectedWorktree, worktreeStatus, setWorktreeStatus } = useAppStore()
+  const { selectedWorktree, worktreeStatus, setWorktreeStatus, openFile } = useAppStore()
   const [commitMessage, setCommitMessage] = useState('')
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [selectedFile, setSelectedFile] = useState<string | null>(null)
 
   // Load worktree status when selected worktree changes
   useEffect(() => {
@@ -258,10 +257,14 @@ export function ReviewPanel() {
       )
     }
 
+    const handleFileClick = () => {
+      openFile(fullPath)
+    }
+
     return (
       <div
         key={fullPath}
-        onClick={() => setSelectedFile(fullPath)}
+        onClick={handleFileClick}
         className="flex items-center gap-2 px-4 py-1.5 hover:bg-[#111111] cursor-pointer transition-colors"
         style={{ paddingLeft: `${16 + depth * 12}px` }}
       >
@@ -366,12 +369,6 @@ export function ReviewPanel() {
         </div>
       )}
 
-      {/* File Diff Viewer */}
-      <FileDiffViewer
-        filePath={selectedFile || ''}
-        isOpen={!!selectedFile}
-        onClose={() => setSelectedFile(null)}
-      />
     </motion.div>
   )
 }

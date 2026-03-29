@@ -5,16 +5,17 @@ import {
   X,
   Plus,
   Terminal,
-  Square,
   Command,
   Robot,
   Sparkle,
   Diamond,
-  Cursor
+  Cursor,
+  FileCode
 } from '@phosphor-icons/react'
 import { AgentType } from '@/types'
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { TerminalInstance } from '@/components/terminal/TerminalInstance'
+import { invoke } from '@tauri-apps/api/core'
 
 type AgentTab = {
   id: string
@@ -22,6 +23,13 @@ type AgentTab = {
   name: string
   icon: React.ReactNode
   color: string
+}
+
+interface DiffLine {
+  type: 'header' | 'add' | 'remove' | 'context'
+  content: string
+  oldLine?: number
+  newLine?: number
 }
 
 const AGENT_TABS: AgentTab[] = [
@@ -65,12 +73,75 @@ export function CenterPanel() {
     addTerminal, 
     removeTerminal, 
     setActiveTerminal,
-    selectedWorktree 
+    selectedWorktree,
+    activeView,
+    setActiveView,
+    openFiles,
+    activeFile,
+    closeFile,
+    setActiveFile
   } = useAppStore()
   
   const [activeTab, setActiveTab] = useState<string>('claude')
   const [command, setCommand] = useState('')
+  const [diffContent, setDiffContent] = useState<DiffLine[]>([])
+  const [loadingDiff, setLoadingDiff] = useState(false)
   const terminalRef = useRef<HTMLDivElement>(null)
+
+  // Parse diff from string
+  const parseDiff = (diff: string): DiffLine[] => {
+    const lines: DiffLine[] = []
+    let oldLine = 0
+    let newLine = 0
+
+    for (const line of diff.split('\n')) {
+      if (line.startsWith('@@')) {
+        const match = line.match(/@@ -(\d+).*\+(\d+)/)
+        if (match) {
+          oldLine = parseInt(match[1]) - 1
+          newLine = parseInt(match[2]) - 1
+        }
+        lines.push({ type: 'header', content: line })
+      } else if (line.startsWith('+')) {
+        newLine++
+        lines.push({ type: 'add', content: line, newLine })
+      } else if (line.startsWith('-')) {
+        oldLine++
+        lines.push({ type: 'remove', content: line, oldLine })
+      } else if (line.startsWith(' ')) {
+        oldLine++
+        newLine++
+        lines.push({ type: 'context', content: line, oldLine, newLine })
+      } else {
+        lines.push({ type: 'context', content: line })
+      }
+    }
+
+    return lines
+  }
+
+  // Load diff when active file changes
+  useEffect(() => {
+    const loadDiff = async () => {
+      if (!activeFile || !selectedWorktree || activeView !== 'changes') return
+      
+      setLoadingDiff(true)
+      try {
+        const diff: string = await invoke('get_diff', { 
+          worktreePath: selectedWorktree.path,
+          filePath: activeFile
+        })
+        setDiffContent(parseDiff(diff))
+      } catch (error) {
+        console.error('Failed to load diff:', error)
+        setDiffContent([])
+      } finally {
+        setLoadingDiff(false)
+      }
+    }
+
+    loadDiff()
+  }, [activeFile, selectedWorktree, activeView])
 
   const handleTabClick = (tabId: string) => {
     setActiveTab(tabId)
@@ -112,6 +183,21 @@ export function CenterPanel() {
 
   const activeAgent = AGENT_INFO[activeTab]
   const hasTerminal = terminals.some(t => t.agent_type === activeTab)
+
+  // Get file extension for icon
+  const getFileExtension = (path: string) => {
+    const parts = path.split('.')
+    return parts.length > 1 ? parts[parts.length - 1].toUpperCase() : ''
+  }
+
+  // Get filename from path
+  const getFileName = (path: string) => {
+    const parts = path.split('/')
+    return parts[parts.length - 1]
+  }
+
+  const addedCount = diffContent.filter(l => l.type === 'add').length
+  const removedCount = diffContent.filter(l => l.type === 'remove').length
 
   return (
     <div className="flex-1 flex flex-col bg-[#0a0a0a] border-r border-[#1a1a1a] min-w-0">
@@ -159,94 +245,240 @@ export function CenterPanel() {
         </button>
       </div>
 
-      {/* Terminal Header */}
-      <div className="h-10 flex items-center justify-between px-4 border-b border-[#1a1a1a]">
-        <div className="flex items-center gap-2 text-[#6b6b6b]">
-          <Terminal className="w-4 h-4" />
-          <span className="text-sm">TERMINAL</span>
-        </div>
+      {/* View Tabs */}
+      <div className="h-10 flex items-center px-4 border-b border-[#1a1a1a]">
         <div className="flex items-center gap-1">
-          <button className="p-1.5 hover:bg-[#1a1a1a] rounded text-[#6b6b6b] hover:text-[#9b9b9b]">
-            <Square className="w-3.5 h-3.5" />
+          <button
+            onClick={() => setActiveView('console')}
+            className={cn(
+              "flex items-center gap-2 px-3 py-1.5 text-sm transition-all rounded-md",
+              activeView === 'console' 
+                ? "bg-[#1a1a1a] text-[#e0e0e0]" 
+                : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
+            )}
+          >
+            <Terminal className="w-4 h-4" />
+            <span>Console</span>
           </button>
-          <button className="p-1.5 hover:bg-[#1a1a1a] rounded text-[#6b6b6b] hover:text-[#9b9b9b]">
-            <X className="w-3.5 h-3.5" />
+          <button
+            onClick={() => setActiveView('changes')}
+            className={cn(
+              "flex items-center gap-2 px-3 py-1.5 text-sm transition-all rounded-md",
+              activeView === 'changes' 
+                ? "bg-[#1a1a1a] text-[#e0e0e0]" 
+                : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
+            )}
+          >
+            <FileCode className="w-4 h-4" />
+            <span>Changes</span>
           </button>
         </div>
       </div>
 
-      {/* Terminal Content */}
+      {/* Content Area */}
       <div className="flex-1 overflow-hidden relative">
-        {!selectedWorktree ? (
-          <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
-            <Robot className="w-12 h-12 mb-3 opacity-50" />
-            <p className="text-sm">Select a worktree to start an agent</p>
-          </div>
-        ) : !hasTerminal ? (
-          <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
-            <div className="text-center space-y-4">
-              <div className="w-20 h-20 mx-auto bg-[#1a1a1a] rounded-lg flex items-center justify-center">
-                <Sparkle className="w-10 h-10 text-[#d97757]" />
-              </div>
-              <div>
-                <p className="text-lg font-medium text-[#9b9b9b]">{activeAgent.subtitle}</p>
-                <p className="text-sm text-[#6b6b6b]">{activeAgent.model}</p>
-              </div>
-              <p className="text-xs text-[#5b5b5b] font-mono">{activeAgent.path}</p>
+        {activeView === 'console' ? (
+          // Console View
+          !selectedWorktree ? (
+            <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
+              <Robot className="w-12 h-12 mb-3 opacity-50" />
+              <p className="text-sm">Select a worktree to start an agent</p>
             </div>
-          </div>
-        ) : (
-          <div className="h-full flex flex-col">
-            {/* Agent Info Banner */}
-            <div className="px-4 py-3 border-b border-[#1a1a1a] flex items-center gap-4">
-              <div className="w-10 h-10 bg-[#1a1a1a] rounded-lg flex items-center justify-center">
-                <Sparkle className="w-5 h-5 text-[#d97757]" />
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-[#e0e0e0] font-medium">{activeAgent.subtitle}</span>
-                  <span className="text-xs text-[#6b6b6b]">{activeAgent.version}</span>
+          ) : !hasTerminal ? (
+            <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
+              <div className="text-center space-y-4">
+                <div className="w-20 h-20 mx-auto bg-[#1a1a1a] rounded-lg flex items-center justify-center">
+                  <Sparkle className="w-10 h-10 text-[#d97757]" />
                 </div>
-                <p className="text-sm text-[#6b6b6b]">{activeAgent.model}</p>
+                <div>
+                  <p className="text-lg font-medium text-[#9b9b9b]">{activeAgent.subtitle}</p>
+                  <p className="text-sm text-[#6b6b6b]">{activeAgent.model}</p>
+                </div>
+                <p className="text-xs text-[#5b5b5b] font-mono">{activeAgent.path}</p>
               </div>
-              <p className="text-xs text-[#5b5b5b] font-mono">{activeAgent.path}</p>
             </div>
+          ) : (
+            <div className="h-full flex flex-col">
+              {/* Agent Info Banner */}
+              <div className="px-4 py-3 border-b border-[#1a1a1a] flex items-center gap-4">
+                <div className="w-10 h-10 bg-[#1a1a1a] rounded-lg flex items-center justify-center">
+                  <Sparkle className="w-5 h-5 text-[#d97757]" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[#e0e0e0] font-medium">{activeAgent.subtitle}</span>
+                    <span className="text-xs text-[#6b6b6b]">{activeAgent.version}</span>
+                  </div>
+                  <p className="text-sm text-[#6b6b6b]">{activeAgent.model}</p>
+                </div>
+                <p className="text-xs text-[#5b5b5b] font-mono">{activeAgent.path}</p>
+              </div>
 
-            {/* Terminal Output */}
-            <div ref={terminalRef} className="flex-1 overflow-auto p-4 font-mono text-sm">
-              {terminals
-                .filter(t => t.agent_type === activeTab)
-                .map(terminal => (
-                  <TerminalInstance key={terminal.id} terminal={terminal} />
-                ))}
+              {/* Terminal Output */}
+              <div ref={terminalRef} className="flex-1 overflow-auto p-4 font-mono text-sm">
+                {terminals
+                  .filter(t => t.agent_type === activeTab)
+                  .map(terminal => (
+                    <TerminalInstance key={terminal.id} terminal={terminal} />
+                  ))}
+              </div>
             </div>
-          </div>
+          )
+        ) : (
+          // Changes View
+          !selectedWorktree ? (
+            <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
+              <FileCode className="w-12 h-12 mb-3 opacity-50" />
+              <p className="text-sm">Select a worktree to view changes</p>
+            </div>
+          ) : openFiles.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
+              <FileCode className="w-12 h-12 mb-3 opacity-50" />
+              <p className="text-sm">Select a file from Review Changes to view diff</p>
+            </div>
+          ) : (
+            <div className="h-full flex flex-col">
+              {/* File Tabs */}
+              <div className="flex items-center border-b border-[#1a1a1a] overflow-x-auto">
+                {openFiles.map((file) => {
+                  const isActive = activeFile === file
+                  const fileName = getFileName(file)
+                  
+                  return (
+                    <button
+                      key={file}
+                      onClick={() => setActiveFile(file)}
+                      className={cn(
+                        "flex items-center gap-2 px-4 py-2 text-sm border-r border-[#1a1a1a] min-w-fit",
+                        isActive 
+                          ? "bg-[#1a1a1a] text-[#e0e0e0]" 
+                          : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
+                      )}
+                    >
+                      <span className="truncate max-w-[150px]">{fileName}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          closeFile(file)
+                        }}
+                        className="p-0.5 hover:bg-[#2a2a2a] rounded text-[#6b6b6b] hover:text-[#e0e0e0]"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* File Content */}
+              {activeFile ? (
+                loadingDiff ? (
+                  <div className="flex-1 flex items-center justify-center text-[#6b6b6b]">
+                    <div className="animate-spin w-6 h-6 border-2 border-[#2a2a2a] border-t-[#d97757] rounded-full" />
+                  </div>
+                ) : (
+                  <>
+                    {/* File Header */}
+                    <div className="px-4 py-3 border-b border-[#1a1a1a] flex items-center justify-between bg-[#0f0f0f]">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs font-medium px-2 py-0.5 bg-[#1a1a1a] rounded text-[#6b6b6b]">
+                          {getFileExtension(activeFile)}
+                        </span>
+                        <span className="text-sm text-[#e0e0e0] font-medium">
+                          {activeFile}
+                        </span>
+                        <span className="text-xs text-[#d97757] border border-[#d97757]/30 px-1.5 py-0.5 rounded">
+                          M
+                        </span>
+                      </div>
+                      
+                      <div className="flex items-center gap-3 text-xs">
+                        <span className="flex items-center gap-1 text-[#4ade80]">
+                          +{addedCount}
+                        </span>
+                        <span className="flex items-center gap-1 text-[#f87171]">
+                          -{removedCount}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Diff Content */}
+                    <div className="flex-1 overflow-auto">
+                      <div className="font-mono text-sm">
+                        {diffContent.map((line, idx) => (
+                          <div key={idx} className="flex hover:bg-[#1a1a1a]/50">
+                            {/* Line Numbers */}
+                            <div className="flex w-20 text-xs text-[#4a4a4a] select-none bg-[#0f0f0f] border-r border-[#1a1a1a]">
+                              <span className="w-10 text-right pr-2 py-0.5">
+                                {line.oldLine || ''}
+                              </span>
+                              <span className="w-10 text-right pr-2 py-0.5">
+                                {line.newLine || ''}
+                              </span>
+                            </div>
+                            
+                            {/* Content */}
+                            <div className={`
+                              flex-1 py-0.5 pl-3 pr-4 whitespace-pre
+                              ${line.type === 'add' ? 'bg-[#1a3a1a]/30 text-[#4ade80]' : ''}
+                              ${line.type === 'remove' ? 'bg-[#3a1a1a]/30 text-[#f87171]' : ''}
+                              ${line.type === 'header' ? 'text-[#6b6b6b] bg-[#1a1a1a]/50' : ''}
+                              ${line.type === 'context' ? 'text-[#9b9b9b]' : ''}
+                            `}>
+                              {/* Line indicator */}
+                              <span className={`
+                                inline-block w-4 mr-2 select-none
+                                ${line.type === 'add' ? 'text-[#4ade80]' : ''}
+                                ${line.type === 'remove' ? 'text-[#f87171]' : ''}
+                                ${line.type === 'context' ? 'text-[#4a4a4a]' : ''}
+                              `}>
+                                {line.type === 'add' && '+'}
+                                {line.type === 'remove' && '-'}
+                                {line.type === 'context' && ' '}
+                              </span>
+                              {line.content.slice(1)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )
+              ) : (
+                <div className="flex-1 flex items-center justify-center text-[#5b5b5b]">
+                  <p className="text-sm">Select a file tab to view</p>
+                </div>
+              )}
+            </div>
+          )
         )}
       </div>
 
-      {/* Command Input */}
-      <div className="p-4 border-t border-[#1a1a1a]">
-        <form onSubmit={handleSubmitCommand} className="relative">
-          <div className="flex items-center gap-2 px-4 py-3 bg-[#111111] border border-[#1a1a1a] rounded-lg focus-within:border-[#2a2a2a]">
-            <span className="text-[#6b6b6b]">›</span>
-            <input
-              type="text"
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              placeholder={`Type a task for ${activeTab}...`}
-              className="flex-1 bg-transparent text-[#e0e0e0] placeholder-[#5b5b5b] outline-none text-sm"
-              disabled={!selectedWorktree}
-            />
-            <button
-              type="submit"
-              disabled={!command.trim() || !selectedWorktree}
-              className="p-1 bg-[#2a2a2a] hover:bg-[#3a3a3a] disabled:opacity-50 disabled:cursor-not-allowed rounded text-[#9b9b9b] transition-colors"
-            >
-              <Command className="w-4 h-4" />
-            </button>
-          </div>
-        </form>
-      </div>
+      {/* Command Input - Only show in console view */}
+      {activeView === 'console' && (
+        <div className="p-4 border-t border-[#1a1a1a]">
+          <form onSubmit={handleSubmitCommand} className="relative">
+            <div className="flex items-center gap-2 px-4 py-3 bg-[#111111] border border-[#1a1a1a] rounded-lg focus-within:border-[#2a2a2a]">
+              <span className="text-[#6b6b6b]">›</span>
+              <input
+                type="text"
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder={`Type a task for ${activeTab}...`}
+                className="flex-1 bg-transparent text-[#e0e0e0] placeholder-[#5b5b5b] outline-none text-sm"
+                disabled={!selectedWorktree}
+              />
+              <button
+                type="submit"
+                disabled={!command.trim() || !selectedWorktree}
+                className="p-1 bg-[#2a2a2a] hover:bg-[#3a3a3a] disabled:opacity-50 disabled:cursor-not-allowed rounded text-[#9b9b9b] transition-colors"
+              >
+                <Command className="w-4 h-4" />
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   )
 }

@@ -14,6 +14,13 @@ interface AppState {
   terminals: TerminalSession[];
   activeTerminalId: string | null;
 
+  // View State
+  activeView: 'console' | 'changes';
+  
+  // File Tabs
+  openFiles: string[];
+  activeFile: string | null;
+
   // UI State
   sidebarCollapsed: boolean;
   terminalPanelHeight: number;
@@ -30,6 +37,13 @@ interface AppState {
   removeTerminal: (id: string) => void;
   setActiveTerminal: (id: string | null) => void;
 
+  setActiveView: (view: 'console' | 'changes') => void;
+  
+  // File Tab Actions
+  openFile: (file: string) => void;
+  closeFile: (file: string) => void;
+  setActiveFile: (file: string | null) => void;
+
   toggleSidebar: () => void;
   setTerminalPanelHeight: (height: number) => void;
   toggleTerminalPanel: () => void;
@@ -42,6 +56,9 @@ export const useAppStore = create<AppState>((set) => ({
   worktreeStatus: {},
   terminals: [],
   activeTerminalId: null,
+  activeView: 'console',
+  openFiles: [],
+  activeFile: null,
   sidebarCollapsed: false,
   terminalPanelHeight: 300,
   showTerminalPanel: true,
@@ -67,6 +84,40 @@ export const useAppStore = create<AppState>((set) => ({
       : state.activeTerminalId,
   })),
   setActiveTerminal: (id) => set({ activeTerminalId: id }),
+
+  setActiveView: (view) => set({ activeView: view }),
+  
+  // File Tab Actions
+  openFile: (file) => set((state) => {
+    // If file is not already open, add it
+    if (!state.openFiles.includes(file)) {
+      return {
+        openFiles: [...state.openFiles, file],
+        activeFile: file,
+        activeView: 'changes'
+      };
+    }
+    // If already open, just make it active
+    return {
+      activeFile: file,
+      activeView: 'changes'
+    };
+  }),
+  
+  closeFile: (file) => set((state) => {
+    const newOpenFiles = state.openFiles.filter(f => f !== file);
+    // If closing the active file, switch to another file or null
+    let newActiveFile = state.activeFile;
+    if (state.activeFile === file) {
+      newActiveFile = newOpenFiles.length > 0 ? newOpenFiles[newOpenFiles.length - 1] : null;
+    }
+    return {
+      openFiles: newOpenFiles,
+      activeFile: newActiveFile
+    };
+  }),
+  
+  setActiveFile: (file) => set({ activeFile: file }),
 
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   setTerminalPanelHeight: (height) => set({ terminalPanelHeight: height }),
