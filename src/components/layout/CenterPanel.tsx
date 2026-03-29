@@ -45,7 +45,7 @@ const AGENT_INFO: Record<string, { version: string; model: string; subtitle: str
     version: 'v1.0.0', 
     model: 'AI Assistant', 
     subtitle: 'OpenCode Agent',
-    path: '~/.mandor/worktrees/mandor/main'
+    path: '~'
   },
 }
 
@@ -64,8 +64,7 @@ export function CenterPanel() {
     selectedWorktree,
     activeView,
     setActiveView,
-    openFiles,
-    activeFile,
+    getWorktreeFileSession,
     closeFile,
     setActiveFile,
     getOpencodeServer,
@@ -83,6 +82,12 @@ export function CenterPanel() {
 
   // Get server for selected worktree
   const currentServer = selectedWorktree ? getOpencodeServer(selectedWorktree.path) : undefined
+
+  // Get file session for selected worktree
+  const fileSession = selectedWorktree 
+    ? getWorktreeFileSession(selectedWorktree.path)
+    : { openFiles: [], activeFile: null }
+  const { openFiles, activeFile } = fileSession
 
   // Parse diff from string
   const parseDiff = (diff: string): DiffLine[] => {
@@ -367,21 +372,6 @@ export function CenterPanel() {
             </div>
           ) : (
             <div className="h-full flex flex-col">
-              {/* Agent Info Banner */}
-              <div className="px-4 py-3 border-b border-[#1a1a1a] flex items-center gap-4">
-                <div className="w-10 h-10 bg-[#1a1a1a] rounded-lg flex items-center justify-center">
-                  <Command className="w-5 h-5 text-[#9b9b9b]" />
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[#e0e0e0] font-medium">{activeAgent.subtitle}</span>
-                    <span className="text-xs text-[#6b6b6b]">{activeAgent.version}</span>
-                  </div>
-                  <p className="text-sm text-[#6b6b6b]">{activeAgent.model}</p>
-                </div>
-                <p className="text-xs text-[#5b5b5b] font-mono">{activeAgent.path}</p>
-              </div>
-
               {/* Messages Area */}
               <div ref={terminalRef} className="flex-1 overflow-auto p-4 space-y-4">
                 {messages.length === 0 ? (
@@ -449,14 +439,14 @@ export function CenterPanel() {
             <div className="h-full flex flex-col">
               {/* File Tabs */}
               <div className="flex items-center border-b border-[#1a1a1a] overflow-x-auto">
-                {openFiles.map((file) => {
+                {openFiles.map((file: string) => {
                   const isActive = activeFile === file
                   const fileName = getFileName(file)
                   
                   return (
                     <button
                       key={file}
-                      onClick={() => setActiveFile(file)}
+                      onClick={() => selectedWorktree && setActiveFile(selectedWorktree.path, file)}
                       className={cn(
                         "flex items-center gap-2 px-4 py-2 text-sm border-r border-[#1a1a1a] min-w-fit",
                         isActive 
@@ -468,7 +458,7 @@ export function CenterPanel() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
-                          closeFile(file)
+                          selectedWorktree && closeFile(selectedWorktree.path, file)
                         }}
                         className="p-0.5 hover:bg-[#2a2a2a] rounded text-[#6b6b6b] hover:text-[#e0e0e0]"
                       >
@@ -566,32 +556,30 @@ export function CenterPanel() {
       {/* Bottom Panel - Command Input */}
       {activeView === 'console' && selectedWorktree && currentServer?.isRunning && (
         <div className="border-t border-[#1a1a1a] p-4">
-            <div className="p-4">
-              <form onSubmit={handleSubmitCommand} className="relative">
-                <div className="flex items-center gap-2 px-4 py-3 bg-[#111111] border border-[#1a1a1a] rounded-lg focus-within:border-[#2a2a2a]">
-                  <span className="text-[#6b6b6b]">›</span>
-                  <input
-                    type="text"
-                    value={command}
-                    onChange={(e) => setCommand(e.target.value)}
-                    placeholder="Type a message to opencode..."
-                    className="flex-1 bg-transparent text-[#e0e0e0] placeholder-[#5b5b5b] outline-none text-sm"
-                    disabled={!currentServer?.isRunning || isSending}
-                  />
-                  <button
-                    type="submit"
-                    disabled={!command.trim() || !currentServer?.isRunning || isSending}
-                    className="p-1 bg-[#2a2a2a] hover:bg-[#3a3a3a] disabled:opacity-50 disabled:cursor-not-allowed rounded text-[#9b9b9b] transition-colors"
-                  >
-                    {isSending ? (
-                      <div className="w-4 h-4 border-2 border-[#2a2a2a] border-t-[#9b9b9b] rounded-full animate-spin" />
-                    ) : (
-                      <Command className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
+          <form onSubmit={handleSubmitCommand} className="relative">
+            <div className="flex items-center gap-2 px-4 py-3 bg-[#111111] border border-[#1a1a1a] rounded-lg focus-within:border-[#2a2a2a]">
+              <span className="text-[#6b6b6b]">›</span>
+              <input
+                type="text"
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder="Type a message to opencode..."
+                className="flex-1 bg-transparent text-[#e0e0e0] placeholder-[#5b5b5b] outline-none text-sm"
+                disabled={!currentServer?.isRunning || isSending}
+              />
+              <button
+                type="submit"
+                disabled={!command.trim() || !currentServer?.isRunning || isSending}
+                className="p-1 bg-[#2a2a2a] hover:bg-[#3a3a3a] disabled:opacity-50 disabled:cursor-not-allowed rounded text-[#9b9b9b] transition-colors"
+              >
+                {isSending ? (
+                  <div className="w-4 h-4 border-2 border-[#2a2a2a] border-t-[#9b9b9b] rounded-full animate-spin" />
+                ) : (
+                  <Command className="w-4 h-4" />
+                )}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

@@ -258,7 +258,9 @@ export function ReviewPanel() {
     }
 
     const handleFileClick = () => {
-      openFile(fullPath)
+      if (selectedWorktree) {
+        openFile(selectedWorktree.path, fullPath)
+      }
     }
 
     return (

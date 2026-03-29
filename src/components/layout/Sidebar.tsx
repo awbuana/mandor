@@ -81,11 +81,6 @@ export function Sidebar() {
     return worktree.branch.replace('refs/heads/', '')
   }
 
-  const getBranchSlug = (worktree: Worktree) => {
-    const branchName = getBranchName(worktree)
-    return branchName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
-  }
-
   // Fetch diff stats for all worktrees
   useEffect(() => {
     const fetchDiffStats = async () => {
@@ -194,7 +189,6 @@ export function Sidebar() {
           ) : (
             worktrees.map((worktree, index) => {
               const branchName = getBranchName(worktree)
-              const branchSlug = getBranchSlug(worktree)
               const changes = getChangeCount(worktree)
               const isSelected = selectedWorktree?.path === worktree.path
 
@@ -233,11 +227,17 @@ export function Sidebar() {
                           )}
                         </div>
                         
-                        {/* Branch Slug */}
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-xs text-[#5b5b5b]">{branchSlug}</span>
+                        {/* Commit Hash */}
+                        <div className="mt-0.5">
                           <span className="text-xs text-[#5b5b5b] font-mono">
                             {worktree.head.slice(0, 7)}
+                          </span>
+                        </div>
+                        
+                        {/* Worktree Path */}
+                        <div className="mt-1" title={worktree.path}>
+                          <span className="text-[10px] text-[#4a4a4a] font-mono block overflow-hidden text-ellipsis whitespace-nowrap max-w-[200px]">
+                            {worktree.path.replace(/^\/Users\/[^/]+/, '~')}
                           </span>
                         </div>
                       </div>
