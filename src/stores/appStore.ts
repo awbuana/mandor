@@ -27,6 +27,8 @@ export interface WorktreeSession {
   };
   agent: {
     messages: AgentMessage[];
+    isSending: boolean;
+    streamingContent: string;
     // Opencode session info scoped to this worktree
     opencodeSession?: {
       sessionId: string;
@@ -89,6 +91,9 @@ interface AppState {
   addAgentMessage: (worktreePath: string, message: AgentMessage) => void;
   clearAgentMessages: (worktreePath: string) => void;
   setAgentOpencodeSession: (worktreePath: string, session: { sessionId: string; port: number; hostname: string; isRunning: boolean } | undefined) => void;
+  setAgentIsSending: (worktreePath: string, isSending: boolean) => void;
+  setAgentStreamingContent: (worktreePath: string, content: string) => void;
+  appendAgentStreamingContent: (worktreePath: string, content: string) => void;
 
   // Opencode Server Actions
   getOpencodeServer: (worktreePath: string) => OpencodeServerInstance | undefined;
@@ -108,6 +113,8 @@ const createDefaultSession = (): WorktreeSession => ({
   },
   agent: {
     messages: [],
+    isSending: false,
+    streamingContent: '',
     opencodeSession: undefined,
   },
 });
@@ -279,6 +286,57 @@ export const useAppStore = create<AppState>((set, get) => ({
           agent: {
             ...currentSession.agent,
             opencodeSession: session,
+          }
+        }
+      }
+    };
+  }),
+
+  setAgentIsSending: (worktreePath: string, isSending: boolean) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            isSending,
+          }
+        }
+      }
+    };
+  }),
+
+  setAgentStreamingContent: (worktreePath: string, content: string) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            streamingContent: content,
+          }
+        }
+      }
+    };
+  }),
+
+  appendAgentStreamingContent: (worktreePath: string, content: string) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          agent: {
+            ...currentSession.agent,
+            streamingContent: currentSession.agent.streamingContent + content,
           }
         }
       }

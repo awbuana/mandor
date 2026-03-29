@@ -12,7 +12,7 @@ import {
 import { AgentType } from '@/types'
 import { useState, useRef, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+
 
 type AgentTab = {
   id: string
@@ -37,39 +37,7 @@ interface Message {
   isStreaming?: boolean
 }
 
-interface StreamEventPayload {
-  session_id: string
-  event?: string
-  data: StreamEventData
-}
 
-interface StreamEventData {
-  type?: string
-  event?: string
-  message?: MessageData
-  info?: {
-    id?: string
-    role?: string
-  }
-  parts?: Array<{
-    type?: string
-    text?: string
-  }>
-  content?: string
-  text?: string
-  delta?: string
-}
-
-interface MessageData {
-  info?: {
-    id?: string
-    role?: string
-  }
-  parts?: Array<{
-    type?: string
-    text?: string
-  }>
-}
 
 const AGENT_TABS: AgentTab[] = [
   { id: 'codex', type: 'opencode', name: 'opencode', icon: <Command className="w-4 h-4" />, color: '#9b9b9b' },
@@ -106,17 +74,16 @@ export function CenterPanel() {
     getOpencodeServer,
     startOpencodeServer,
     addAgentMessage,
+    setAgentIsSending,
+    setAgentStreamingContent,
   } = useAppStore()
 
   const [activeTab, setActiveTab] = useState<string>('codex')
   const [command, setCommand] = useState('')
   const [diffContent, setDiffContent] = useState<DiffLine[]>([])
   const [loadingDiff, setLoadingDiff] = useState(false)
-  const [isSending, setIsSending] = useState(false)
-  const [streamingContent, setStreamingContent] = useState('')
   const terminalRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const unlistenRef = useRef<(() => void) | null>(null)
 
   // Get server for selected worktree
   const currentServer = selectedWorktree ? getOpencodeServer(selectedWorktree.path) : undefined
@@ -134,75 +101,18 @@ export function CenterPanel() {
   }, [currentServer])
 
   // Get worktree session (includes files and agent messages)
-  const worktreeSession = selectedWorktree 
+  const worktreeSession = selectedWorktree
     ? getWorktreeSession(selectedWorktree.path)
-    : { files: { openFiles: [], activeFile: null }, agent: { messages: [], opencodeSession: undefined } }
+    : { files: { openFiles: [], activeFile: null }, agent: { messages: [], isSending: false, streamingContent: '', opencodeSession: undefined } }
   const { openFiles, activeFile } = worktreeSession.files
-  
-  // Get agent messages for selected worktree
+
+  // Get agent state for selected worktree
   const agentMessages = worktreeSession.agent.messages
+  const isSending = worktreeSession.agent.isSending
+  const streamingContent = worktreeSession.agent.streamingContent
 
-  // Setup event listener for streaming
-  useEffect(() => {
-    if (!currentServer?.isRunning || !currentServer.sessionId) return
-
-    console.log('Setting up event listener for session:', currentServer.sessionId)
-
-    const setupListener = async () => {
-      // Start the event stream in background
-      invoke('stream_opencode_events', {
-        hostname: currentServer.hostname,
-        port: currentServer.port,
-        sessionId: currentServer.sessionId,
-      }).catch(err => {
-        console.error('Event stream error:', err)
-      })
-
-      // Listen for events
-      const unlisten = await listen<StreamEventPayload>('opencode-event', (event) => {
-        console.log('Received opencode event:', event.payload)
-        
-        const { event: eventName, data } = event.payload
-        
-        // Handle different event types
-        if (eventName === 'message.delta' || data?.type === 'delta') {
-          // Handle streaming delta content
-          const delta = data?.delta || data?.content || data?.text || ''
-          if (delta) {
-            console.log('Received delta:', delta)
-            setStreamingContent(prev => prev + delta)
-          }
-        } else if (data?.parts && data.parts.length > 0) {
-          // Handle complete message parts
-          const textContent = data.parts
-            .filter((part: {type?: string, text?: string}) => part.type === 'text' || part.type === 'content')
-            .map((part: {type?: string, text?: string}) => part.text || '')
-            .join('')
-          
-          if (textContent) {
-            console.log('Received message content:', textContent.substring(0, 100))
-            setStreamingContent(prev => prev + textContent)
-          }
-        } else if (data?.content || data?.text) {
-          // Handle direct content
-          const content = data.content || data.text || ''
-          console.log('Received direct content:', content.substring(0, 100))
-          setStreamingContent(prev => prev + content)
-        }
-      })
-
-      unlistenRef.current = unlisten
-    }
-
-    setupListener()
-
-    return () => {
-      if (unlistenRef.current) {
-        unlistenRef.current()
-        unlistenRef.current = null
-      }
-    }
-  }, [currentServer?.isRunning, currentServer?.sessionId, currentServer?.hostname, currentServer?.port])
+  // Note: Streaming is disabled for now - using synchronous responses instead
+  // Each worktree has its own isSending state in the store
 
   // Parse diff from string
   const parseDiff = (diff: string): DiffLine[] => {
@@ -331,15 +241,14 @@ export function CenterPanel() {
 
     addAgentMessage(selectedWorktree.path, userMessage)
     setCommand('')
-    setIsSending(true)
-    setStreamingContent('')
+    setAgentIsSending(selectedWorktree.path, true)
+    setAgentStreamingContent(selectedWorktree.path, '')
 
     try {
       console.log('Sending message to session:', currentServer.sessionId)
       console.log('Server:', currentServer.hostname, currentServer.port)
       
       // Send message and wait for response (synchronous)
-      setIsSending(true)
       const response = await invoke('send_opencode_message', {
         hostname: currentServer.hostname,
         port: currentServer.port,
@@ -372,7 +281,7 @@ export function CenterPanel() {
         }
         addAgentMessage(selectedWorktree.path, errorMessage)
       }
-      setIsSending(false)
+      setAgentIsSending(selectedWorktree.path, false)
     } catch (error) {
       console.error('Failed to send message:', error)
       const errorMessage: Message = {
@@ -384,7 +293,7 @@ export function CenterPanel() {
       if (selectedWorktree) {
         addAgentMessage(selectedWorktree.path, errorMessage)
       }
-      setIsSending(false)
+      setAgentIsSending(selectedWorktree.path, false)
     }
   }
 
