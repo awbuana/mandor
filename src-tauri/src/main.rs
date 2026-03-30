@@ -44,6 +44,7 @@ fn main() {
             git::discard_changes,
             git::commit,
             git::get_branches,
+            git::get_git_log,
             git::open_repository,
             worktree::open_in_editor,
             worktree::get_worktree_info,

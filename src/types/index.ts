@@ -22,6 +22,15 @@ export interface WorktreeStatus {
   untracked: string[];
 }
 
+export interface GitCommit {
+  hash: string;
+  short_hash: string;
+  message: string;
+  author: string;
+  date: string;
+  is_head: boolean;
+}
+
 export interface TerminalSession {
   id: string;
   worktree_path: string;

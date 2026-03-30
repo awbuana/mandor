@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Check, X } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { FileComment } from '@/types'
 
@@ -28,60 +27,71 @@ interface CommentBubbleProps {
 }
 
 function CommentBubble({ comment, onResolve, onDelete }: CommentBubbleProps) {
+  const isUser = comment.author === 'user'
+
   return (
     <motion.div
-      initial={{ opacity: 0, y: -8 }}
+      initial={{ opacity: 0, y: -5 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -8 }}
+      exit={{ opacity: 0, y: -5 }}
       className={cn(
-        'ml-[72px] mr-4 mt-2 mb-3 p-3 rounded-lg border',
-        'bg-[#1a1a1a] border-[#0f0f0f]',
+        'ml-[72px] mr-4 mt-1 mb-2 py-1.5 px-2 text-[10px]',
+        'border-l-2',
+        isUser
+          ? 'bg-[#1a1512] border-l-[#d97757]'
+          : 'bg-[#12151a] border-l-[#6a9bcc]',
         comment.resolved && 'opacity-60'
       )}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-xs text-[#9b9b9b]">
-              {new Date(comment.timestamp).toLocaleDateString()}
-            </span>
-            {comment.resolved && (
-              <span className="text-xs text-[#4ade80] flex items-center gap-1">
-                <Check size={12} />
-                Resolved
-              </span>
-            )}
-          </div>
-          <p className={cn(
-            'text-sm text-[#e0e0e0] whitespace-pre-wrap',
-            comment.resolved && 'line-through text-[#5b5b5b]'
-          )}>
-            {comment.content}
-          </p>
-        </div>
-        <div className="flex items-center gap-1 flex-shrink-0">
-          {!comment.resolved && (
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
+      {/* Single line header with metadata and actions */}
+      <div className="flex items-center gap-1.5">
+        <span className={cn(
+          'font-mono text-[9px] uppercase',
+          isUser ? 'text-[#d97757]' : 'text-[#6a9bcc]'
+        )}>
+          {isUser ? 'YOU' : 'AGENT'}
+        </span>
+        <span className="text-[8px] font-mono text-[#4a4a4a]">
+          :{comment.lineNumber}
+        </span>
+        <span className="text-[8px] font-mono text-[#3a3a3a] ml-auto">
+          {new Date(comment.timestamp).toLocaleDateString('en-GB', { 
+            day: '2-digit', 
+            month: '2-digit'
+          })}
+        </span>
+        {!comment.resolved && (
+          <div className="flex items-center gap-1.5 ml-2">
+            <button
               onClick={() => onResolve(comment.id)}
-              className="p-1.5 rounded hover:bg-[#0f0f0f] text-[#9b9b9b] hover:text-[#4ade80] transition-colors"
-              title="Resolve comment"
+              className="text-[#57d977] hover:text-[#77f797] text-[9px] font-mono"
+              title="Resolve"
             >
-              <Check size={14} />
-            </motion.button>
-          )}
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => onDelete(comment.id)}
-            className="p-1.5 rounded hover:bg-[#0f0f0f] text-[#9b9b9b] hover:text-[#f87171] transition-colors"
-            title="Delete comment"
-          >
-            <X size={14} />
-          </motion.button>
-        </div>
+              [✓]
+            </button>
+            <button
+              onClick={() => onDelete(comment.id)}
+              className="text-[#d97757] hover:text-[#f99777] text-[9px] font-mono"
+              title="Delete"
+            >
+              [✕]
+            </button>
+          </div>
+        )}
+        {comment.resolved && (
+          <span className="text-[9px] font-mono text-[#57d977] ml-2">
+            [RESOLVED]
+          </span>
+        )}
       </div>
+
+      {/* Content */}
+      <p className={cn(
+        'text-[#a0a0a0] text-[10px] leading-tight mt-0.5 font-mono',
+        comment.resolved && 'line-through text-[#5b5b5b]'
+      )}>
+        {comment.content}
+      </p>
     </motion.div>
   )
 }
@@ -103,43 +113,47 @@ function InlineCommentInput({ onSubmit, onCancel }: InlineCommentInputProps) {
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: -8 }}
+      initial={{ opacity: 0, y: -5 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -8 }}
-      className="ml-[72px] mr-4 mt-2 mb-3"
+      exit={{ opacity: 0, y: -5 }}
+      className="ml-[72px] mr-4 mt-1 mb-2"
     >
-      <div className="bg-[#1a1a1a] border border-[#d97757] rounded-lg overflow-hidden">
+      <div className="bg-[#1a1512] border border-[#d97757]/50 py-1.5 px-2">
         <textarea
           value={content}
           onChange={(e) => setContent(e.target.value)}
           placeholder="Add a comment..."
-          className="w-full bg-transparent text-sm text-[#e0e0e0] placeholder-[#5b5b5b] p-3 resize-none outline-none"
-          rows={3}
+          className="w-full bg-transparent text-[10px] text-[#e0e0e0] placeholder-[#5b5b5b] resize-none outline-none font-mono px-2 py-1.5"
+          rows={2}
           autoFocus
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              handleSubmit()
+            }
+          }}
         />
-        <div className="flex items-center justify-end gap-2 px-3 pb-3">
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
+        <div className="flex items-center justify-end gap-2 mt-1">
+          <span className="text-[9px] text-[#5b5b5b] font-mono mr-auto">
+            Cmd+Enter
+          </span>
+          <button
             onClick={onCancel}
-            className="px-3 py-1.5 text-xs text-[#9b9b9b] hover:text-[#e0e0e0] transition-colors"
+            className="text-[9px] text-[#9b9b9b] hover:text-[#e0e0e0] font-mono transition-colors"
           >
-            Cancel
-          </motion.button>
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
+            [CANCEL]
+          </button>
+          <button
             onClick={handleSubmit}
             disabled={!content.trim()}
             className={cn(
-              'px-3 py-1.5 text-xs rounded transition-colors',
+              'text-[9px] font-mono transition-colors',
               content.trim()
-                ? 'bg-[#d97757] text-white hover:bg-[#c06a4b]'
-                : 'bg-[#5b5b5b] text-[#9b9b9b] cursor-not-allowed'
+                ? 'text-[#d97757] hover:text-[#f99777]'
+                : 'text-[#5b5b5b] cursor-not-allowed'
             )}
           >
-            Comment
-          </motion.button>
+            [COMMENT]
+          </button>
         </div>
       </div>
     </motion.div>
@@ -219,13 +233,13 @@ export function InlineDiffViewer({
                           setActiveCommentLine(lineNumber)
                         }}
                         className={cn(
-                          'absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-[#316dca] flex items-center justify-center text-white hover:bg-[#4184e4] shadow-lg cursor-pointer transition-opacity',
+                          'absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center text-[#d97757] hover:text-[#f99777] cursor-pointer transition-opacity font-mono text-[10px]',
                           isHovered && !isAddingComment ? 'opacity-100' : 'opacity-0 pointer-events-none'
                         )}
                         style={{ zIndex: 100 }}
                         title="Add comment"
                       >
-                        <Plus size={12} weight="bold" />
+                        [+]
                       </button>
                     )}
                   </div>

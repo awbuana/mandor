@@ -54,6 +54,16 @@ pub struct DiffHunk {
     pub lines: Vec<DiffLine>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GitCommit {
+    pub hash: String,
+    pub short_hash: String,
+    pub message: String,
+    pub author: String,
+    pub date: String,
+    pub is_head: bool,
+}
+
 #[tauri::command]
 pub fn list_worktrees(repo_path: String) -> Result<Vec<Worktree>, String> {
     let output = Command::new("git")
@@ -455,6 +465,45 @@ pub fn get_branches(repo_path: String) -> Result<Vec<String>, String> {
         .collect();
 
     Ok(branches)
+}
+
+#[tauri::command]
+pub fn get_git_log(worktree_path: String, limit: Option<i32>) -> Result<Vec<GitCommit>, String> {
+    let limit = limit.unwrap_or(50);
+    
+    let output = Command::new("git")
+        .args(&[
+            "-C", &worktree_path,
+            "log",
+            &format!("--max-count={}", limit),
+            "--pretty=format:%H|%h|%s|%an|%ar|%D"
+        ])
+        .output()
+        .map_err(|e| format!("Failed to get git log: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut commits = Vec::new();
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.splitn(6, '|').collect();
+        if parts.len() >= 5 {
+            let refs = parts.get(5).unwrap_or(&"");
+            commits.push(GitCommit {
+                hash: parts[0].to_string(),
+                short_hash: parts[1].to_string(),
+                message: parts[2].to_string(),
+                author: parts[3].to_string(),
+                date: parts[4].to_string(),
+                is_head: refs.contains("HEAD"),
+            });
+        }
+    }
+
+    Ok(commits)
 }
 
 #[tauri::command]

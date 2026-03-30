@@ -2,12 +2,10 @@ import { useAppStore } from '@/stores/appStore'
 import { cn } from '@/lib/utils'
 import { motion } from 'framer-motion'
 import {
-  X,
-  Terminal,
   Command,
   Robot,
-  FileCode,
-  Play
+  Play,
+  FileCode
 } from '@phosphor-icons/react'
 import { AgentType, FileComment } from '@/types'
 import { InlineDiffViewer } from '@/components/diff/InlineDiffViewer'
@@ -590,7 +588,7 @@ export function CenterPanel() {
   return (
     <div className="flex-1 flex flex-col bg-[#0a0a0a] border-r border-[#1a1a1a] min-w-0">
       {/* Agent Tabs */}
-      <div className="h-12 flex items-center px-4 gap-1 border-b border-[#1a1a1a]">
+      <div className="h-10 flex items-center px-3 gap-0 border-b border-[#1a1a1a] font-mono">
         {AGENT_TABS.map((tab) => {
           const isActive = activeTab === tab.id
           const hasActiveTerminal = terminals.some(t => t.agent_type === tab.id)
@@ -600,28 +598,28 @@ export function CenterPanel() {
               key={tab.id}
               onClick={() => handleTabClick(tab.id)}
               className={cn(
-                "relative flex items-center gap-2 px-4 py-2 text-sm transition-all",
-                isActive ? "text-[#e0e0e0]" : "text-[#6b6b6b] hover:text-[#9b9b9b]"
+                "relative flex items-center gap-1.5 px-3 py-2 text-[11px] transition-all",
+                isActive ? "text-[#e0e0e0] bg-[#1a1a1a]" : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
               )}
             >
               {/* Active Indicator */}
               {isActive && (
                 <motion.div
                   layoutId="activeTab"
-                  className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#d97757]"
+                  className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#d97757]"
                   transition={{ type: 'spring', stiffness: 300, damping: 30 }}
                 />
               )}
 
               <span style={{ color: isActive ? tab.color : undefined }}>{tab.icon}</span>
-              <span>{tab.name}</span>
+              <span className="uppercase tracking-wide">{tab.name}</span>
 
               {hasActiveTerminal && (
                 <button
                   onClick={(e) => handleCloseTab(e, tab.id)}
-                  className="ml-1 p-0.5 hover:bg-[#2a2a2a] rounded text-[#6b6b6b] hover:text-[#e0e0e0]"
+                  className="ml-1 text-[10px] text-[#6b6b6b] hover:text-[#e0e0e0] font-mono"
                 >
-                  <X className="w-3 h-3" />
+                  [x]
                 </button>
               )}
             </button>
@@ -630,31 +628,31 @@ export function CenterPanel() {
       </div>
 
       {/* View Tabs */}
-      <div className="h-10 flex items-center px-4 border-b border-[#1a1a1a]">
+      <div className="h-9 flex items-center px-3 border-b border-[#1a1a1a] font-mono">
         <div className="flex items-center gap-1">
           <button
             onClick={() => setActiveView('console')}
             className={cn(
-              "flex items-center gap-2 px-3 py-1.5 text-sm transition-all rounded-md",
+              "flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] transition-all",
               activeView === 'console'
                 ? "bg-[#1a1a1a] text-[#e0e0e0]"
                 : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
             )}
           >
-            <Terminal className="w-4 h-4" />
-            <span>Console</span>
+            <span className="text-[#9b9b9b]">[_]</span>
+            <span className="uppercase">Console</span>
           </button>
           <button
             onClick={() => setActiveView('changes')}
             className={cn(
-              "flex items-center gap-2 px-3 py-1.5 text-sm transition-all rounded-md",
+              "flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] transition-all",
               activeView === 'changes'
                 ? "bg-[#1a1a1a] text-[#e0e0e0]"
                 : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
             )}
           >
-            <FileCode className="w-4 h-4" />
-            <span>Changes</span>
+            <span className="text-[#9b9b9b]">[&lt;&gt;]</span>
+            <span className="uppercase">Changes</span>
           </button>
         </div>
       </div>
@@ -798,7 +796,7 @@ export function CenterPanel() {
           ) : (
             <div className="h-full flex flex-col">
               {/* File Tabs */}
-              <div className="flex items-center border-b border-[#1a1a1a] overflow-x-auto">
+              <div className="flex items-center border-b border-[#1a1a1a] overflow-x-auto font-mono">
                 {openFiles.map((file: string) => {
                   const isActive = activeFile === file
                   const fileName = getFileName(file)
@@ -808,7 +806,7 @@ export function CenterPanel() {
                       key={file}
                       onClick={() => selectedWorktree && setActiveFile(selectedWorktree.path, file)}
                       className={cn(
-                        "flex items-center gap-2 px-4 py-2 text-sm border-r border-[#1a1a1a] min-w-fit cursor-pointer",
+                        "flex items-center gap-1.5 px-3 py-1.5 text-[10px] border-r border-[#1a1a1a] min-w-fit cursor-pointer",
                         isActive
                           ? "bg-[#1a1a1a] text-[#e0e0e0]"
                           : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
@@ -820,9 +818,9 @@ export function CenterPanel() {
                           e.stopPropagation()
                           selectedWorktree && closeFile(selectedWorktree.path, file)
                         }}
-                        className="p-0.5 hover:bg-[#2a2a2a] rounded text-[#6b6b6b] hover:text-[#e0e0e0]"
+                        className="text-[9px] text-[#6b6b6b] hover:text-[#e0e0e0] font-mono"
                       >
-                        <X className="w-3 h-3" />
+                        [x]
                       </button>
                     </div>
                   )
@@ -838,45 +836,45 @@ export function CenterPanel() {
                 ) : (
                   <>
                     {/* File Header */}
-                    <div className="px-4 py-3 border-b border-[#1a1a1a] flex items-center justify-between bg-[#0f0f0f]">
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs font-medium px-2 py-0.5 bg-[#1a1a1a] rounded text-[#6b6b6b]">
+                    <div className="px-3 py-2 border-b border-[#1a1a1a] flex items-center justify-between bg-[#0f0f0f] font-mono">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[9px] px-1.5 py-0.5 bg-[#1a1a1a] text-[#6b6b6b]">
                           {getFileExtension(activeFile)}
                         </span>
-                        <span className="text-sm text-[#e0e0e0] font-medium">
+                        <span className="text-[11px] text-[#e0e0e0]">
                           {activeFile}
                         </span>
-                        <span className="text-xs text-[#d97757] border border-[#d97757]/30 px-1.5 py-0.5 rounded">
-                          M
+                        <span className="text-[9px] text-[#d97757]">
+                          [M]
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-3">
                         {/* Zoom Controls */}
                         <div className="flex items-center gap-1">
                           <button
                             onClick={() => setDiffZoom(z => Math.max(50, z - 10))}
-                            className="px-2 py-1 text-xs bg-[#1a1a1a] hover:bg-[#2a2a2a] rounded text-[#9b9b9b] transition-colors"
+                            className="px-1.5 py-0.5 text-[10px] bg-[#1a1a1a] hover:bg-[#2a2a2a] text-[#9b9b9b] transition-colors font-mono"
                             title="Zoom out"
                           >
-                            −
+                            [−]
                           </button>
-                          <span className="text-xs text-[#6b6b6b] w-10 text-center">{diffZoom}%</span>
+                          <span className="text-[10px] text-[#6b6b6b] w-8 text-center">{diffZoom}%</span>
                           <button
                             onClick={() => setDiffZoom(z => Math.min(200, z + 10))}
-                            className="px-2 py-1 text-xs bg-[#1a1a1a] hover:bg-[#2a2a2a] rounded text-[#9b9b9b] transition-colors"
+                            className="px-1.5 py-0.5 text-[10px] bg-[#1a1a1a] hover:bg-[#2a2a2a] text-[#9b9b9b] transition-colors font-mono"
                             title="Zoom in"
                           >
-                            +
+                            [+]
                           </button>
                         </div>
 
-                        <div className="flex items-center gap-3 text-xs">
-                          <span className="flex items-center gap-1 text-[#4ade80]">
+                        <div className="flex items-center gap-2 text-[10px] font-mono">
+                          <span className="text-[#4ade80]">
                             +{addedCount}
                           </span>
-                          <span className="flex items-center gap-1 text-[#f87171]">
-                            -{removedCount}
+                          <span className="text-[#f87171]">
+                            −{removedCount}
                           </span>
                         </div>
                       </div>
