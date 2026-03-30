@@ -43,6 +43,7 @@ fn main() {
             opencode::start_opencode_server,
             opencode::send_opencode_message,
             opencode::send_opencode_message_async,
+            opencode::reply_question,
             opencode::list_session_messages,
             opencode::stream_opencode_events,
             opencode::check_opencode_health,

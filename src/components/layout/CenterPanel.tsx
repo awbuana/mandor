@@ -241,6 +241,7 @@ export function CenterPanel() {
         if (data?.type === 'session.idle') {
           activeMessageIds.forEach(id => finalizeStreamingMessage(selectedWorktree.path, id))
           activeMessageIds.clear()
+          messageRoles.clear()
           setAgentIsSending(selectedWorktree.path, false)
           isBusy = false
           return
@@ -249,6 +250,7 @@ export function CenterPanel() {
         if (data?.type === 'question.asked') {
           activeMessageIds.forEach(id => finalizeStreamingMessage(selectedWorktree.path, id))
           activeMessageIds.clear()
+          messageRoles.clear()
           setAgentIsSending(selectedWorktree.path, false)
           isBusy = false
 
@@ -548,8 +550,6 @@ export function CenterPanel() {
   const handleAnswerQuestion = async (label: string) => {
     if (!pendingQuestion || !selectedWorktree || !currentServer?.isRunning) return
 
-    const [providerId, modelId] = selectedModel ? selectedModel.split('/') : ['', '']
-
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -564,13 +564,11 @@ export function CenterPanel() {
     setAgentStreamingContent(selectedWorktree.path, '')
 
     try {
-      await invoke('send_opencode_message_async', {
+      await invoke('reply_question', {
         hostname: currentServer.hostname,
         port: currentServer.port,
-        sessionId: currentServer.sessionId,
-        message: label,
-        providerId: providerId || null,
-        modelId: modelId || null,
+        questionId: pendingQuestion.id,
+        answer: label,
       })
     } catch (error) {
       console.error('Failed to answer question:', error)

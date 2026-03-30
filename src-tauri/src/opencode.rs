@@ -270,6 +270,49 @@ pub async fn send_opencode_message_async(
     }
 }
 
+/// Reply to a question from the opencode server
+#[command]
+pub async fn reply_question(
+    hostname: String,
+    port: u16,
+    question_id: String,
+    answer: String,
+) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let reply_url = format!("http://{}:{}/question/{}/reply", hostname, port, question_id);
+
+    println!("Replying to question: {}", reply_url);
+    println!("Question ID: {}", question_id);
+    println!("Answer: {}", answer);
+
+    let body = serde_json::json!({
+        "answers": [[answer]]
+    });
+
+    let response = client
+        .post(&reply_url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| {
+            println!("Network error replying to question: {}", e);
+            format!("Failed to reply to question: {}", e)
+        })?;
+
+    let status = response.status();
+    println!("Response status: {}", status);
+
+    if status.is_success() {
+        let body = response.text().await.unwrap_or_else(|_| "OK".to_string());
+        println!("Reply response: {}", body);
+        Ok(body)
+    } else {
+        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        println!("Error response: {}", error_text);
+        Err(format!("Failed to reply to question: {} - {}", status, error_text))
+    }
+}
+
 /// Get available providers and models from opencode server
 #[command]
 pub async fn get_opencode_providers(
