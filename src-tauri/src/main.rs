@@ -16,7 +16,18 @@ async fn open_app_window(app: tauri::AppHandle) {
 }
 
 fn main() {
-    tauri::Builder::default()
+    // Initialize CrabNebula DevTools as early as possible (debug builds only)
+    #[cfg(debug_assertions)]
+    let devtools = tauri_plugin_devtools::init();
+
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(devtools);
+    }
+
+    builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
@@ -33,6 +44,7 @@ fn main() {
             git::discard_changes,
             git::commit,
             git::get_branches,
+            git::get_git_log,
             git::open_repository,
             worktree::open_in_editor,
             worktree::get_worktree_info,
@@ -43,6 +55,7 @@ fn main() {
             opencode::start_opencode_server,
             opencode::send_opencode_message,
             opencode::send_opencode_message_async,
+            opencode::reply_question,
             opencode::list_session_messages,
             opencode::stream_opencode_events,
             opencode::check_opencode_health,

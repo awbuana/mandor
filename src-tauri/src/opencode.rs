@@ -193,6 +193,8 @@ pub async fn send_opencode_message_async(
     port: u16,
     session_id: String,
     message: String,
+    provider_id: Option<String>,
+    model_id: Option<String>,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
     let message_url = format!("http://{}:{}/session/{}/message", hostname, port, session_id);
@@ -200,17 +202,29 @@ pub async fn send_opencode_message_async(
     println!("Sending message to: {}", message_url);
     println!("Session ID: {}", session_id);
     println!("Message: {}", message);
+    println!("Provider: {:?}, Model: {:?}", provider_id, model_id);
+
+    // Build request body
+    let mut body = serde_json::json!({
+        "parts": [
+            {
+                "type": "text",
+                "text": message
+            }
+        ]
+    });
+
+    // Add model if provider and model are specified
+    if let (Some(provider), Some(model)) = (&provider_id, &model_id) {
+        body["model"] = serde_json::json!({
+            "providerID": provider,
+            "modelID": model
+        });
+    }
 
     let response = client
         .post(&message_url)
-        .json(&serde_json::json!({
-            "parts": [
-                {
-                    "type": "text",
-                    "text": message
-                }
-            ]
-        }))
+        .json(&body)
         .send()
         .await
         .map_err(|e| {
@@ -253,6 +267,49 @@ pub async fn send_opencode_message_async(
         let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
         println!("Error response: {}", error_text);
         Err(format!("Failed to send message: {} - {}", status, error_text))
+    }
+}
+
+/// Reply to a question from the opencode server
+#[command]
+pub async fn reply_question(
+    hostname: String,
+    port: u16,
+    question_id: String,
+    answer: String,
+) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let reply_url = format!("http://{}:{}/question/{}/reply", hostname, port, question_id);
+
+    println!("Replying to question: {}", reply_url);
+    println!("Question ID: {}", question_id);
+    println!("Answer: {}", answer);
+
+    let body = serde_json::json!({
+        "answers": [[answer]]
+    });
+
+    let response = client
+        .post(&reply_url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| {
+            println!("Network error replying to question: {}", e);
+            format!("Failed to reply to question: {}", e)
+        })?;
+
+    let status = response.status();
+    println!("Response status: {}", status);
+
+    if status.is_success() {
+        let body = response.text().await.unwrap_or_else(|_| "OK".to_string());
+        println!("Reply response: {}", body);
+        Ok(body)
+    } else {
+        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        println!("Error response: {}", error_text);
+        Err(format!("Failed to reply to question: {} - {}", status, error_text))
     }
 }
 
@@ -373,6 +430,7 @@ pub async fn list_session_messages(
 
 /// Stream events from the opencode server
 /// This uses Server-Sent Events (SSE) to receive real-time updates
+/// Spawns a background task and returns immediately
 #[command]
 pub async fn stream_opencode_events(
     hostname: String,
@@ -380,22 +438,48 @@ pub async fn stream_opencode_events(
     session_id: String,
     window: tauri::Window,
 ) -> Result<(), String> {
+    let window_clone = window.clone();
+    
+    tauri::async_runtime::spawn(async move {
+        stream_events_loop(hostname, port, session_id, window_clone).await;
+    });
+
+    Ok(())
+}
+
+async fn stream_events_loop(
+    hostname: String,
+    port: u16,
+    session_id: String,
+    window: tauri::Window,
+) {
     let client = reqwest::Client::new();
     let event_url = format!("http://{}:{}/event", hostname, port);
 
-    println!("Connecting to event stream: {}", event_url);
+    println!("[SSE] Connecting to event stream: {}", event_url);
 
-    let response = client
-        .get(&event_url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to connect to event stream: {}", e))?;
+    let response = match client.get(&event_url).send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            eprintln!("[SSE] Failed to connect to event stream: {}", e);
+            let _ = window.emit("opencode-error", serde_json::json!({
+                "session_id": &session_id,
+                "error": format!("Failed to connect: {}", e)
+            }));
+            return;
+        }
+    };
 
     if !response.status().is_success() {
-        return Err(format!("Failed to connect to event stream: {}", response.status()));
+        eprintln!("[SSE] Failed to connect to event stream: {}", response.status());
+        let _ = window.emit("opencode-error", serde_json::json!({
+            "session_id": &session_id,
+            "error": format!("Failed to connect: {}", response.status())
+        }));
+        return;
     }
 
-    println!("Connected to event stream, waiting for events...");
+    println!("[SSE] Connected to event stream, waiting for events...");
 
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
@@ -406,12 +490,10 @@ pub async fn stream_opencode_events(
                 let text = String::from_utf8_lossy(&bytes);
                 buffer.push_str(&text);
 
-                // Process complete SSE events from buffer
                 while let Some(pos) = buffer.find("\n\n") {
                     let event_text = buffer[..pos].to_string();
                     buffer = buffer[pos + 2..].to_string();
 
-                    // Parse SSE event
                     let mut event_name = String::new();
                     let mut event_data = String::new();
 
@@ -424,11 +506,21 @@ pub async fn stream_opencode_events(
                     }
 
                     if !event_data.is_empty() {
-                        println!("Received event: {} with data: {}", event_name, event_data);
+                        // Skip logging events with large diffs to reduce noise
+                        let should_log = !event_data.contains("session.diff") && 
+                                         !event_data.contains("\"diffs\":[");
+                        
+                        if should_log {
+                            // Truncate large event data for logging
+                            let log_data = if event_data.len() > 500 {
+                                format!("{}... (truncated, {} bytes)", &event_data[..500], event_data.len())
+                            } else {
+                                event_data.clone()
+                            };
+                            println!("[SSE] Received event: {} with data: {}", event_name, log_data);
+                        }
 
-                        // Try to parse as JSON
                         if let Ok(json_data) = serde_json::from_str::<serde_json::Value>(&event_data) {
-                            // Emit event to frontend
                             let emit_result = window.emit("opencode-event", serde_json::json!({
                                 "session_id": &session_id,
                                 "event": event_name,
@@ -436,23 +528,24 @@ pub async fn stream_opencode_events(
                             }));
 
                             if let Err(e) = emit_result {
-                                eprintln!("Failed to emit event: {}", e);
-                            } else {
-                                println!("Event emitted successfully");
+                                eprintln!("[SSE] Failed to emit event: {}", e);
                             }
                         }
                     }
                 }
             }
             Err(e) => {
-                eprintln!("Error reading event stream: {}", e);
+                eprintln!("[SSE] Error reading event stream: {}", e);
+                let _ = window.emit("opencode-error", serde_json::json!({
+                    "session_id": &session_id,
+                    "error": format!("Stream error: {}", e)
+                }));
                 break;
             }
         }
     }
 
-    println!("Event stream ended");
-    Ok(())
+    println!("[SSE] Event stream ended");
 }
 
 /// Check if the opencode server is healthy

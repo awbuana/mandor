@@ -54,6 +54,16 @@ pub struct DiffHunk {
     pub lines: Vec<DiffLine>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GitCommit {
+    pub hash: String,
+    pub short_hash: String,
+    pub message: String,
+    pub author: String,
+    pub date: String,
+    pub is_head: bool,
+}
+
 #[tauri::command]
 pub fn list_worktrees(repo_path: String) -> Result<Vec<Worktree>, String> {
     let output = Command::new("git")
@@ -250,9 +260,10 @@ pub fn get_worktree_status(worktree_path: String) -> Result<WorktreeStatus, Stri
 
 #[tauri::command]
 pub fn get_diff(worktree_path: String, file_path: Option<String>) -> Result<String, String> {
-    let output = if let Some(file) = file_path {
+    // First try regular diff for tracked/modified files
+    let diff_output = if let Some(ref file) = file_path {
         Command::new("git")
-            .args(&["-C", &worktree_path, "diff", "--", &file])
+            .args(&["-C", &worktree_path, "diff", "--", file])
             .output()
             .map_err(|e| format!("Failed to get diff: {}", e))?
     } else {
@@ -262,11 +273,60 @@ pub fn get_diff(worktree_path: String, file_path: Option<String>) -> Result<Stri
             .map_err(|e| format!("Failed to get diff: {}", e))?
     };
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    // If we have output, return it
+    if diff_output.status.success() && !diff_output.stdout.is_empty() {
+        return Ok(String::from_utf8_lossy(&diff_output.stdout).to_string());
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    // If no diff output, check if it's a new/untracked file
+    if let Some(ref file) = file_path {
+        // Check if file is untracked
+        let untracked_output = Command::new("git")
+            .args(&["-C", &worktree_path, "ls-files", "--others", "--exclude-standard", file])
+            .output()
+            .map_err(|e| format!("Failed to check untracked files: {}", e))?;
+
+        let is_untracked = String::from_utf8_lossy(&untracked_output.stdout).trim() == file;
+
+        // Also check if file is staged (new file)
+        let staged_output = Command::new("git")
+            .args(&["-C", &worktree_path, "diff", "--cached", "--name-only", "--", file])
+            .output()
+            .map_err(|e| format!("Failed to check staged files: {}", e))?;
+
+        let is_staged_new = !String::from_utf8_lossy(&staged_output.stdout).trim().is_empty();
+
+        // For new files, generate a diff showing all content as added
+        if is_untracked || is_staged_new {
+            let file_path_full = PathBuf::from(&worktree_path).join(file);
+            
+            if file_path_full.exists() {
+                // Read file content and format as diff
+                let content = std::fs::read_to_string(&file_path_full)
+                    .map_err(|e| format!("Failed to read file: {}", e))?;
+                
+                let line_count = content.lines().count();
+                
+                // Create diff header
+                let mut diff = format!("diff --git a/{} b/{}\n", file, file);
+                diff.push_str(&format!("new file mode 100644\n"));
+                diff.push_str(&format!("index 0000000..{}\n", "e69de29"));
+                diff.push_str(&format!("--- /dev/null\n"));
+                diff.push_str(&format!("+++ b/{}\n", file));
+                diff.push_str(&format!("@@ -0,0 +1,{} @@\n", line_count));
+                
+                // Add all lines with + prefix
+                for line in content.lines() {
+                    diff.push_str(&format!("+{}\n", line));
+                }
+                
+                return Ok(diff);
+            }
+        }
+    }
+
+    // Return empty string if no diff found
+    Ok(String::new())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -376,11 +436,15 @@ pub fn commit(worktree_path: String, message: String) -> Result<String, String> 
         .output()
         .map_err(|e| format!("Failed to commit: {}", e))?;
 
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        let error_msg = if stderr.is_empty() { stdout } else { stderr };
+        return Err(error_msg.to_string());
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(stdout.to_string())
 }
 
 #[tauri::command]
@@ -401,6 +465,45 @@ pub fn get_branches(repo_path: String) -> Result<Vec<String>, String> {
         .collect();
 
     Ok(branches)
+}
+
+#[tauri::command]
+pub fn get_git_log(worktree_path: String, limit: Option<i32>) -> Result<Vec<GitCommit>, String> {
+    let limit = limit.unwrap_or(50);
+    
+    let output = Command::new("git")
+        .args(&[
+            "-C", &worktree_path,
+            "log",
+            &format!("--max-count={}", limit),
+            "--pretty=format:%H|%h|%s|%an|%ar|%D"
+        ])
+        .output()
+        .map_err(|e| format!("Failed to get git log: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut commits = Vec::new();
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.splitn(6, '|').collect();
+        if parts.len() >= 5 {
+            let refs = parts.get(5).unwrap_or(&"");
+            commits.push(GitCommit {
+                hash: parts[0].to_string(),
+                short_hash: parts[1].to_string(),
+                message: parts[2].to_string(),
+                author: parts[3].to_string(),
+                date: parts[4].to_string(),
+                is_head: refs.contains("HEAD"),
+            });
+        }
+    }
+
+    Ok(commits)
 }
 
 #[tauri::command]
