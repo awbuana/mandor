@@ -8,25 +8,33 @@ interface CreateWorktreeModalProps {
   onClose: () => void
 }
 
+/**
+ * Modal component for creating a new git worktree
+ * Provides a terminal-styled interface for entering branch name and worktree path
+ */
 export function CreateWorktreeModal({ isOpen, onClose }: CreateWorktreeModalProps) {
-  const { currentRepoPath, addWorktree } = useAppStore()
+  const { currentRepoPath, worktrees, addWorktree } = useAppStore()
   const [branchName, setBranchName] = useState('')
   const [worktreePath, setWorktreePath] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Get main worktree path for repo operations
+  const mainWorktree = worktrees.find(w => w.is_main)
+  const repoPath = currentRepoPath || (mainWorktree ? mainWorktree.path : null)
+
   // Auto-generate worktree path when branch name changes
   useEffect(() => {
     if (branchName.trim()) {
-      const repoName = currentRepoPath 
-        ? currentRepoPath.split('/').pop() || 'repo'
+      const repoName = repoPath 
+        ? repoPath.split('/').pop() || 'repo'
         : 'repo'
       const cleanBranch = branchName.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase()
       setWorktreePath(`../${repoName}-${cleanBranch}`)
     } else {
       setWorktreePath('')
     }
-  }, [branchName, currentRepoPath])
+  }, [branchName, repoPath])
 
   // Reset form when modal opens
   useEffect(() => {
@@ -38,10 +46,11 @@ export function CreateWorktreeModal({ isOpen, onClose }: CreateWorktreeModalProp
   }, [isOpen])
 
   const handleSubmit = async (e: React.FormEvent) => {
+    // Prevent default form submission to avoid page reload
     e.preventDefault()
     
     // Validate repository is loaded
-    if (!currentRepoPath) {
+    if (!repoPath) {
       setError('Please open a repository first')
       return
     }
@@ -62,7 +71,7 @@ export function CreateWorktreeModal({ isOpen, onClose }: CreateWorktreeModalProp
 
     try {
       const newWorktree = await invoke('create_worktree', {
-        repoPath: currentRepoPath,
+        repoPath: repoPath,
         branch: branchName.trim(),
         path: worktreePath.trim()
       })
@@ -96,10 +105,13 @@ export function CreateWorktreeModal({ isOpen, onClose }: CreateWorktreeModalProp
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 10 }}
             transition={{ duration: 0.1 }}
-            className="fixed inset-0 flex items-center justify-center z-50 pointer-events-none"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 flex items-center justify-center z-50"
           >
-            <div className="w-[480px] bg-[#0a0a0a] border border-[#1a1a1a] shadow-2xl pointer-events-auto font-mono">
+            <div 
+              className="w-[480px] bg-[#0a0a0a] border border-[#1a1a1a] shadow-2xl font-mono"
+              // Prevent clicks inside modal from bubbling up to backdrop and closing the modal
+              onClick={(e) => e.stopPropagation()}
+            >
               {/* Terminal Header */}
               <div className="flex items-center justify-between px-3 py-2 bg-[#111111] border-b border-[#1a1a1a]">
                 <div className="flex items-center gap-2">

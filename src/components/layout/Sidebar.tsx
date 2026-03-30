@@ -122,22 +122,16 @@ export function Sidebar() {
     setIsCreateModalOpen(true)
   }
 
+  // Handles the deletion of a worktree when confirmed by the user
   const handleDeleteWorktree = async () => {
-    console.log('Delete clicked', { worktreeToDelete, currentRepoPath })
-    if (!worktreeToDelete) {
-      console.log('Early return - no worktree to delete')
-      return
-    }
+    if (!worktreeToDelete) return
     
     // Find the main repo path from worktrees
     const mainWorktree = worktrees.find(w => w.is_main)
     const repoPath = currentRepoPath || (mainWorktree ? mainWorktree.path : worktreeToDelete.path)
     
-    console.log('Using repoPath:', repoPath)
-    
     setIsDeleting(true)
     try {
-      console.log('Calling delete_worktree', { repoPath, worktreePath: worktreeToDelete.path })
       await invoke('delete_worktree', {
         repoPath: repoPath,
         worktreePath: worktreeToDelete.path
@@ -380,10 +374,7 @@ export function Sidebar() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => {
-                          console.log('Delete button clicked - executing')
-                          handleDeleteWorktree()
-                        }}
+                        onClick={handleDeleteWorktree}
                         disabled={isDeleting}
                         className="px-3 py-1.5 bg-[#f87171]/10 hover:bg-[#f87171]/20 border border-[#f87171]/30 text-[#f87171] text-xs transition-colors disabled:opacity-50 cursor-pointer"
                       >

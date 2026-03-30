@@ -506,6 +506,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const { [messageId]: _, ...remainingStreaming } = currentSession.agent.streamingMessages;
 
+    const finalizedMessage = {
+      ...streamingMessage,
+      isStreaming: false,
+      timestamp: streamingMessage.timestamp || new Date(),
+    };
+
     return {
       worktreeSessions: {
         ...state.worktreeSessions,
@@ -514,7 +520,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           agent: {
             ...currentSession.agent,
             streamingMessages: remainingStreaming,
-            messages: [...currentSession.agent.messages, streamingMessage],
+            messages: [...currentSession.agent.messages, finalizedMessage],
           }
         }
       }

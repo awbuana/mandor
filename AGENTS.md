@@ -98,17 +98,280 @@ cd src-tauri && cargo test        # Run Rust tests
 - Organize commands in modules (git.rs, worktree.rs, terminal.rs, opencode.rs)
 - Use `tauri::command` for frontend-facing functions
 
+## Architecture
+
+### Rendering Overview
+
+The application uses a **three-panel layout** with Zustand for state management:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  TitleBar (drag region + window controls)                            │
+├────────────┬─────────────────────────────────────┬───────────────────┤
+│            │                                     │                   │
+│  Sidebar   │       CenterPanel                   │   ReviewPanel     │
+│  (worktree │   ┌─────────────────────────────┐    │   (source control│
+│   list)    │   │ Agent Tabs │ View Tabs      │    │    + comments     │
+│            │   ├────────────┴─────────────────┤    │                   │
+│  Ports     │   │                             │    │   - Staged        │
+│  Panel     │   │  Console View                │    │   - Changes       │
+│            │   │  (agent chat + streaming)    │    │   - Comments      │
+│            │   │                              │    │   - History       │
+│            │   │  OR                          │    │                   │
+│            │   │                              │    │                   │
+│            │   │  Changes View                │    │                   │
+│            │   │  (diff + inline comments)    │    │                   │
+│            │   └─────────────────────────────┘    │                   │
+│            │   Command Input                     │                   │
+└────────────┴─────────────────────────────────────┴───────────────────┘
+```
+
+### State Management (Zustand Store)
+
+**Worktree Sessions** - All per-worktree state is scoped in `worktreeSessions`:
+- `files.openFiles[]` - Open file tabs
+- `files.activeFile` - Currently selected file
+- `agent.messages[]` - Chat message history
+- `agent.streamingMessages{}` - Active streaming messages by ID
+- `agent.selectedModel` - Current provider/model selection
+- `comments{}` - File comments indexed by path
+
+**Opencode Servers** - Each worktree can have its own server instance:
+- `isRunning`, `port`, `hostname`, `sessionId`
+- Per-worktree server instances (port 4096 + worktree index)
+
+### View Rendering Logic
+
+**CenterPanel** switches between two views based on `activeView` state:
+- `'console'` - Agent chat interface with SSE streaming
+- `'changes'` - Diff viewer with inline comments
+
+**ReviewPanel** shows git status:
+- Staged files (tree view with expand/collapse)
+- Unstaged changes
+- Comments grouped by file
+- Git log/history
+
+### Component Hierarchy
+
+```
+App
+├── TitleBar
+├── Sidebar
+│   ├── WorktreeList (branch names, commit hash, diff stats)
+│   ├── PortsPanel (running opencode servers)
+│   ├── CreateWorktreeModal
+│   └── DeleteWorktreeModal (confirmation dialog)
+├── CenterPanel
+│   ├── AgentTabs (opencode console)
+│   ├── ViewTabs (console | changes)
+│   ├── ConsoleView
+│   │   ├── Messages (role-based styling)
+│   │   │   ├── User messages (orange bubble)
+│   │   │   ├── Assistant text (dark bubble)
+│   │   │   ├── Reasoning (subtle styling)
+│   │   │   └── Tool calls (status badges)
+│   │   ├── StreamingMessages (real-time SSE)
+│   │   ├── PendingQuestion (option buttons)
+│   │   └── CommandInput (provider/model selectors)
+│   └── ChangesView
+│       ├── FileTabs
+│       ├── FileHeader (extension, path, zoom)
+│       └── InlineDiffViewer
+│           ├── Line numbers (old/new)
+│           ├── Diff content (syntax colored)
+│           └── CommentBubbles (inline)
+└── ReviewPanel
+    ├── CommitInput
+    ├── StagedChanges (tree view)
+    ├── Changes (tree view)
+    ├── CommentsSection
+    └── GitLog
+```
+
+### SSE Streaming Flow
+
+1. Server starts via `startOpencodeServer` → stores session info
+2. `stream_opencode_events` invoked to start SSE connection
+3. Events handled in `opencode-event` listener via `listen('opencode-event', ...)`:
+
+#### Event Processing Order
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Incoming SSE Event                                          │
+└─────────────────┬───────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────┐
+│  session.status?  ──→  Update isBusy flag                   │
+│  (busy/idle)         If busy (was idle) → finalize all      │
+└─────────────────┬───────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────┐
+│  session.idle?   ──→  Finalize all streaming messages       │
+│                     Clear activeMessageIds & messageRoles     │
+└─────────────────┬───────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────┐
+│  question.asked? ──→  Finalize streaming, show options      │
+│                     Set pendingQuestion state                 │
+└─────────────────┬───────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────┐
+│  message.updated? ──→  Store messageId → role mapping       │
+│                      Set isBusy = true if role=assistant     │
+└─────────────────┬───────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────┐
+│  message.part.delta? ──→  Only if field='text'              │
+│  (streaming text)      AND role='assistant'                  │
+│                        Create streaming message, append delta│
+└─────────────────┬───────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────┐
+│  !isBusy? ──→  Skip event (return early)                    │
+└─────────────────┬───────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────┐
+│  message.part.updated?                                       │
+│    ├── partType='tool' → Create tool call message            │
+│    │                    Track status: pending/running/        │
+│    │                        completed/error                  │
+│    │                    Extract output from state            │
+│    │                                                  │
+│    └── text content  →  Create text/reasoning message        │
+│                         type='reasoning' if applicable      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Event Details
+
+| Event Type | Condition | Action |
+|------------|-----------|--------|
+| `session.status` | - | Updates `isBusy` flag. When transitioning **idle→busy**, finalizes all active streaming messages |
+| `session.idle` | - | Finalizes all `activeMessageIds`, clears tracking maps, sets `isSending=false` |
+| `question.asked` | - | Finalizes all streaming messages, stores question options in `pendingQuestion` state |
+| `message.updated` | - | Stores `messageId → role` mapping in `messageRoles`. Sets `isBusy=true` for assistant role |
+| `message.part.delta` | `field === 'text'` AND `role === 'assistant'` | Creates/upserts streaming message (content=''), appends delta via `appendStreamingMessageDelta` |
+| `message.part.updated` | `isBusy === true` AND `role === 'assistant'` | Creates tool call messages (type='tool') or text/reasoning messages |
+
+#### Tool Call Message Structure
+
+When `partType === 'tool'`, the message includes:
+```typescript
+{
+  type: 'tool',
+  toolCall: {
+    tool: string,           // Tool name (read, grep, etc.)
+    callID: string,        // Call identifier
+    status: 'pending' | 'running' | 'completed' | 'error',
+    input?: Record<string, unknown>,  // Tool input from state
+    output?: string        // Output/error from state
+  }
+}
+```
+
+Output is extracted from `state` with priority: `output` → `error` → `message`
+
+#### State Variables (local to SSE listener)
+
+- `activeMessageIds: Set<string>` - PartIds being streamed, cleared on session transitions
+- `messageRoles: Map<string, string>` - messageId → role ('user'/'assistant') mapping  
+- `isBusy: boolean` - Agent busy state, set true on `message.updated` with assistant role
+
+### Agent Message Rendering
+
+#### Message Storage
+
+Messages are stored in two locations:
+- **`agent.messages[]`** - Finalized/completed messages (persistent chat history)
+- **`agent.streamingMessages{}`** - Active streaming messages by messageId (real-time updates)
+
+#### Message Interface
+
+```typescript
+interface AgentMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+  messageId?: string;   // For linking SSE events to messages
+  partId?: string;      // For multi-part messages (tool calls)
+  type?: string;        // 'tool' | 'reasoning' | undefined
+  isStreaming?: boolean;
+  toolCall?: {
+    tool: string;
+    callID: string;
+    status: 'pending' | 'running' | 'completed' | 'error';
+    input?: Record<string, unknown>;
+    output?: string;
+  };
+}
+```
+
+#### State Actions
+
+| Action | Description |
+|--------|-------------|
+| `addStreamingMessage` | Add new streaming message by messageId |
+| `updateStreamingMessage` | Update partial fields of streaming message |
+| `upsertStreamingMessage` | Create or update streaming message (idempotent) |
+| `appendStreamingMessageDelta` | Append text delta to streaming message content |
+| `finalarizeStreamingMessage` | Move from streaming to finalized (adds to messages[], removes from streaming) |
+| `clearStreamingMessages` | Clear all streaming messages (e.g., on error) |
+
+#### Rendering Flow
+
+1. **Incoming SSE delta** → `appendStreamingMessageDelta` updates `streamingMessages[messageId]`
+2. **Tool call starts** → `addStreamingMessage` with type='tool', status='pending'
+3. **Tool running** → `updateStreamingMessage` sets status='running'
+4. **Tool completes** → `updateStreamingMessage` sets status='completed', adds output
+5. **Session idle** → `finalizeStreamingMessage` moves all to `agent.messages[]`
+
+#### Rendering Components
+
+**Finalized Messages** (`agent.messages[]`):
+- Displayed with timestamps (except reasoning type)
+- Role-based styling: user (orange bubble), assistant (dark bubble)
+- Tool calls show status badge and formatted input/output
+- Reasoning messages styled subtly with `[+]` icon
+
+**Streaming Messages** (`agent.streamingMessages{}`):
+- Real-time updates via `message.part.delta` events
+- No timestamps shown while streaming
+- Empty content shows animated spinner
+- Tool calls transition through statuses: `pending` → `running` → `completed`/`error`
+- On `session.idle` or `session.status` busy transition, finalized and moved to `agent.messages[]`
+
+**Message Types**:
+- `undefined` - Regular assistant text
+- `'tool'` - Tool call invocation (read, grep, etc.)
+- `'reasoning'` - Chain-of-thought reasoning (subtle styling)
+
+**Tool Call States**:
+- `pending` - Tool invoked but not started (gray badge)
+- `running` - Tool executing (orange badge)
+- `completed` - Tool finished successfully (green badge)
+- `error` - Tool failed (red badge, error output shown)
+
 ## Project Structure
 
 ```
 src/
   components/
     layout/
-      AppShell.tsx    # Main app shell
-      CenterPanel.tsx
-      Sidebar.tsx
-      TitleBar.tsx
-      ReviewPanel.tsx
+      AppShell.tsx    # Motion wrapper (entry animation)
+      CenterPanel.tsx # Main content (console + changes views)
+      Sidebar.tsx     # Worktree list + ports panel
+      TitleBar.tsx    # Window title bar
+      ReviewPanel.tsx # Source control + comments
     ui/               # Reusable UI primitives
     worktree/
       WorktreeView.tsx
@@ -119,8 +382,10 @@ src/
     diff/
       DiffViewer.tsx
       FileDiffViewer.tsx
+      InlineDiffViewer.tsx  # Diff + inline comments
+      FileComments.tsx
   stores/
-    appStore.ts      # Zustand store
+    appStore.ts      # Zustand store (all application state)
   types/
     index.ts         # TypeScript interfaces
   lib/
