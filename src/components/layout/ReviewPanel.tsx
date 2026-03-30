@@ -2,7 +2,6 @@ import { useAppStore } from '@/stores/appStore'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   GitBranch,
-  ArrowUp,
   FileCode,
   Plus,
   Minus,
@@ -16,7 +15,7 @@ import {
   X,
   Robot
 } from '@phosphor-icons/react'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { FileStatus, FileComment } from '@/types'
 import { cn } from '@/lib/utils'
@@ -127,7 +126,8 @@ export function ReviewPanel() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [commentsExpanded, setCommentsExpanded] = useState(true)
-  const [filesExpanded, setFilesExpanded] = useState(true)
+  const [stagedExpanded, setStagedExpanded] = useState(true)
+  const [changesExpanded, setChangesExpanded] = useState(true)
   const [implementingFile, setImplementingFile] = useState<string | null>(null)
 
   // Load worktree status when selected worktree changes
@@ -158,20 +158,26 @@ export function ReviewPanel() {
 
   const status = selectedWorktree ? worktreeStatus[selectedWorktree.path] : null
 
-  // Build file tree from real data
-  const fileTree = useMemo(() => {
-    if (!status) return []
+  // Build file trees for staged and unstaged changes
+  const { stagedTree, changesTree } = useMemo(() => {
+    if (!status) return { stagedTree: [], changesTree: [] }
 
-    const allFiles: { path: string; status: FileChange['status'] }[] = [
+    const stagedFiles: { path: string; status: FileChange['status'] }[] = [
       ...status.staged.map(f => ({ path: f.path, status: 'added' as const })),
+    ]
+
+    const changesFiles: { path: string; status: FileChange['status'] }[] = [
       ...status.modified.map(f => ({ path: f.path, status: 'modified' as const })),
       ...status.untracked.map(p => ({ path: p, status: 'untracked' as const })),
     ]
 
-    return buildFileTree(allFiles)
+    return {
+      stagedTree: buildFileTree(stagedFiles),
+      changesTree: buildFileTree(changesFiles),
+    }
   }, [status])
 
-  // Auto-expand folders that contain changed files
+  // Auto-expand folders
   useEffect(() => {
     const foldersToExpand = new Set<string>()
     
@@ -187,9 +193,10 @@ export function ReviewPanel() {
       }
     }
     
-    collectFolders(fileTree)
+    collectFolders(stagedTree)
+    collectFolders(changesTree)
     setExpandedFolders(foldersToExpand)
-  }, [fileTree])
+  }, [stagedTree, changesTree])
 
   const toggleFolder = (id: string) => {
     const newExpanded = new Set(expandedFolders)
@@ -201,7 +208,50 @@ export function ReviewPanel() {
     setExpandedFolders(newExpanded)
   }
 
-  const totalChanges = status ? status.modified.length + status.staged.length + status.untracked.length : 0
+  const handleStage = async (filePath: string) => {
+    if (!selectedWorktree) return
+    try {
+      await invoke('stage_file', { worktreePath: selectedWorktree.path, filePath })
+      await loadWorktreeStatus()
+    } catch (err) {
+      console.error('Failed to stage file:', err)
+    }
+  }
+
+  const handleUnstage = async (filePath: string) => {
+    if (!selectedWorktree) return
+    try {
+      await invoke('unstage_file', { worktreePath: selectedWorktree.path, filePath })
+      await loadWorktreeStatus()
+    } catch (err) {
+      console.error('Failed to unstage file:', err)
+    }
+  }
+
+  const handleStageAll = async () => {
+    if (!selectedWorktree || !status) return
+    try {
+      const allFiles = [...status.modified, ...status.untracked.map(p => ({ path: p, status: '?', staged: false }))]
+      for (const file of allFiles) {
+        await invoke('stage_file', { worktreePath: selectedWorktree.path, filePath: file.path })
+      }
+      await loadWorktreeStatus()
+    } catch (err) {
+      console.error('Failed to stage all files:', err)
+    }
+  }
+
+  const handleUnstageAll = async () => {
+    if (!selectedWorktree || !status) return
+    try {
+      for (const file of status.staged) {
+        await invoke('unstage_file', { worktreePath: selectedWorktree.path, filePath: file.path })
+      }
+      await loadWorktreeStatus()
+    } catch (err) {
+      console.error('Failed to unstage all files:', err)
+    }
+  }
 
   const handleCommit = async () => {
     if (!selectedWorktree || !commitMessage.trim()) return
@@ -212,15 +262,23 @@ export function ReviewPanel() {
         message: commitMessage.trim()
       })
       setCommitMessage('')
-      loadWorktreeStatus() // Refresh status after commit
+      loadWorktreeStatus()
     } catch (err) {
       console.error('Failed to commit:', err)
-      setError('Failed to commit changes')
+      let errorMessage = 'Failed to commit changes'
+      if (err instanceof Error) {
+        errorMessage = err.message
+      } else if (typeof err === 'string') {
+        errorMessage = err
+      } else if (typeof err === 'object' && err !== null) {
+        errorMessage = (err as { message?: string }).message || JSON.stringify(err)
+      }
+      setError(errorMessage)
     }
   }
 
-  const getStatusIcon = (status: FileChange['status']) => {
-    switch (status) {
+  const getStatusIcon = (statusType: FileChange['status']) => {
+    switch (statusType) {
       case 'added':
         return <Plus className="w-3.5 h-3.5 text-[#4ade80]" />
       case 'removed':
@@ -295,7 +353,7 @@ export function ReviewPanel() {
     }
   }
 
-  const renderFileChange = (item: FileChange, depth = 0, parentPath = ''): React.ReactNode => {
+  const renderFileChange = useCallback((item: FileChange, depth = 0, parentPath = '', isStaged = false): React.ReactNode => {
     const fullPath = parentPath ? `${parentPath}/${item.path}` : item.path
     const isFolder = item.type === 'folder'
     const isExpanded = expandedFolders.has(fullPath)
@@ -323,7 +381,7 @@ export function ReviewPanel() {
             )}
           </button>
           
-          {isExpanded && item.children?.map(child => renderFileChange(child, depth + 1, fullPath))}
+          {isExpanded && item.children?.map(child => renderFileChange(child, depth + 1, fullPath, isStaged))}
         </div>
       )
     }
@@ -337,16 +395,41 @@ export function ReviewPanel() {
     return (
       <div
         key={fullPath}
-        onClick={handleFileClick}
-        className="flex items-center gap-2 px-4 py-1.5 hover:bg-[#111111] cursor-pointer transition-colors"
+        className="group flex items-center gap-2 px-4 py-1.5 hover:bg-[#111111] transition-colors"
         style={{ paddingLeft: `${16 + depth * 12}px` }}
       >
-        {getStatusIcon(item.status)}
-        <FileCode className="w-4 h-4 text-[#6b6b6b]" />
-        <span className="flex-1 text-sm text-[#9b9b9b] truncate">{item.path}</span>
+        {/* Stage/Unstage Button */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            isStaged ? handleUnstage(fullPath) : handleStage(fullPath)
+          }}
+          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-[#2a2a2a] transition-all"
+          title={isStaged ? 'Unstage file' : 'Stage file'}
+        >
+          {isStaged ? (
+            <Minus className="w-3.5 h-3.5 text-[#f87171]" />
+          ) : (
+            <Plus className="w-3.5 h-3.5 text-[#4ade80]" />
+          )}
+        </button>
+
+        <div
+          onClick={handleFileClick}
+          className="flex-1 flex items-center gap-2 cursor-pointer"
+        >
+          {getStatusIcon(item.status)}
+          <FileCode className="w-4 h-4 text-[#6b6b6b]" />
+          <span className="text-sm text-[#9b9b9b] truncate">{item.path}</span>
+        </div>
       </div>
     )
-  }
+  }, [expandedFolders, selectedWorktree, openFile])
+
+  const stagedCount = status?.staged.length || 0
+  const changesCount = (status?.modified.length || 0) + (status?.untracked.length || 0)
+  const hasStagedFiles = stagedCount > 0
+  const hasChanges = changesCount > 0
 
   if (!selectedWorktree) {
     return (
@@ -372,7 +455,7 @@ export function ReviewPanel() {
     >
       {/* Header */}
       <div className="h-12 flex items-center justify-between px-4 border-b border-[#1a1a1a]">
-        <span className="text-sm text-[#9b9b9b]">Review Changes</span>
+        <span className="text-sm text-[#9b9b9b]">Source Control</span>
         <div className="flex items-center gap-1 text-[#6b6b6b]">
           <GitBranch className="w-4 h-4" />
           <span className="text-xs">{status?.commit.slice(0, 7) || '...'}</span>
@@ -380,24 +463,24 @@ export function ReviewPanel() {
       </div>
 
       {/* Commit Section */}
-      <div className="p-4 space-y-3">
+      <div className="p-4 space-y-3 border-b border-[#1a1a1a]">
         <input
           type="text"
           value={commitMessage}
           onChange={(e) => setCommitMessage(e.target.value)}
-          placeholder="Commit message..."
+          placeholder={`Message (⌘Enter to commit on "${status?.branch || 'HEAD'}")`}
           className="w-full px-3 py-2 bg-[#111111] border border-[#1a1a1a] rounded-md text-sm text-[#e0e0e0] placeholder-[#5b5b5b] outline-none focus:border-[#2a2a2a]"
         />
         
         <button
           onClick={handleCommit}
-          disabled={!commitMessage.trim() || totalChanges === 0 || isLoading}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-[#1a1a1a] hover:bg-[#2a2a2a] disabled:opacity-50 disabled:cursor-not-allowed rounded-md text-sm text-[#9b9b9b] transition-colors"
+          disabled={!commitMessage.trim() || !hasStagedFiles || isLoading}
+          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-[#1a4a8a] hover:bg-[#2a5a9a] disabled:opacity-50 disabled:cursor-not-allowed rounded-md text-sm text-white transition-colors"
         >
-          <ArrowUp className="w-4 h-4" />
+          <Check className="w-4 h-4" />
           <span>Commit</span>
-          {totalChanges > 0 && (
-            <span className="text-xs text-[#6b6b6b]">{totalChanges}</span>
+          {stagedCount > 0 && (
+            <span className="text-xs text-white/60">{stagedCount}</span>
           )}
         </button>
 
@@ -406,9 +489,125 @@ export function ReviewPanel() {
         )}
       </div>
 
+      {/* Staged Changes Section */}
+      <div className="border-b border-[#1a1a1a]">
+        <button
+          onClick={() => setStagedExpanded(!stagedExpanded)}
+          className="w-full flex items-center justify-between px-4 py-2 hover:bg-[#111111] transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            {stagedExpanded ? (
+              <CaretDown className="w-3.5 h-3.5 text-[#5b5b5b]" />
+            ) : (
+              <CaretRight className="w-3.5 h-3.5 text-[#5b5b5b]" />
+            )}
+            <span className="text-sm font-medium text-[#9b9b9b]">Staged Changes</span>
+            {stagedCount > 0 && (
+              <span className="text-xs text-[#5b5b5b]">{stagedCount}</span>
+            )}
+          </div>
+          {stagedCount > 0 && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                handleUnstageAll()
+              }}
+              className="text-xs text-[#6b6b6b] hover:text-[#9b9b9b] px-2 py-1 rounded hover:bg-[#2a2a2a]"
+              title="Unstage all changes"
+            >
+              −
+            </button>
+          )}
+        </button>
+
+        <AnimatePresence>
+          {stagedExpanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="overflow-hidden"
+            >
+              {isLoading ? (
+                <div className="flex items-center justify-center h-20 text-[#6b6b6b]">
+                  <div className="animate-spin w-4 h-4 border-2 border-[#2a2a2a] border-t-[#d97757] rounded-full" />
+                </div>
+              ) : !hasStagedFiles ? (
+                <div className="px-4 py-3 text-xs text-[#5b5b5b]">
+                  No staged changes
+                </div>
+              ) : (
+                <div className="py-1">
+                  {stagedTree.map(item => renderFileChange(item, 0, '', true))}
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Changes Section (Unstaged) */}
+      <div className="flex-1 overflow-auto">
+        <button
+          onClick={() => setChangesExpanded(!changesExpanded)}
+          className="w-full flex items-center justify-between px-4 py-2 hover:bg-[#111111] transition-colors border-b border-[#1a1a1a]"
+        >
+          <div className="flex items-center gap-2">
+            {changesExpanded ? (
+              <CaretDown className="w-3.5 h-3.5 text-[#5b5b5b]" />
+            ) : (
+              <CaretRight className="w-3.5 h-3.5 text-[#5b5b5b]" />
+            )}
+            <span className="text-sm font-medium text-[#9b9b9b]">Changes</span>
+            {changesCount > 0 && (
+              <span className="text-xs text-[#5b5b5b]">{changesCount}</span>
+            )}
+          </div>
+          {changesCount > 0 && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                handleStageAll()
+              }}
+              className="text-xs text-[#6b6b6b] hover:text-[#9b9b9b] px-2 py-1 rounded hover:bg-[#2a2a2a]"
+              title="Stage all changes"
+            >
+              +
+            </button>
+          )}
+        </button>
+
+        <AnimatePresence>
+          {changesExpanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="overflow-hidden"
+            >
+              {isLoading ? (
+                <div className="flex items-center justify-center h-20 text-[#6b6b6b]">
+                  <div className="animate-spin w-4 h-4 border-2 border-[#2a2a2a] border-t-[#d97757] rounded-full" />
+                </div>
+              ) : !hasChanges ? (
+                <div className="px-4 py-3 text-xs text-[#5b5b5b]">
+                  No changes
+                </div>
+              ) : (
+                <div className="py-1">
+                  {changesTree.map(item => renderFileChange(item, 0, '', false))}
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
       {/* Comments Section */}
       {selectedWorktree && (
-        <div className="border-b border-[#1a1a1a]">
+        <div className="border-t border-[#1a1a1a] max-h-64 overflow-auto">
           <button
             onClick={() => setCommentsExpanded(!commentsExpanded)}
             className="w-full flex items-center justify-between px-4 py-2 hover:bg-[#111111] transition-colors"
@@ -442,7 +641,7 @@ export function ReviewPanel() {
                 transition={{ duration: 0.2 }}
                 className="overflow-hidden"
               >
-                <div className="px-4 py-2 space-y-2 max-h-64 overflow-y-auto">
+                <div className="px-4 py-2 space-y-2 max-h-48 overflow-y-auto">
                   {(() => {
                     const allComments = getAllComments(selectedWorktree.path)
                     if (allComments.length === 0) {
@@ -540,74 +739,6 @@ export function ReviewPanel() {
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
-      )}
-
-      {/* Files Section */}
-      <div className="flex-1 overflow-auto">
-        {selectedWorktree && (
-          <button
-            onClick={() => setFilesExpanded(!filesExpanded)}
-            className="w-full flex items-center justify-between px-4 py-2 hover:bg-[#111111] transition-colors border-b border-[#1a1a1a]"
-          >
-            <div className="flex items-center gap-2">
-              <Folder className="w-4 h-4 text-[#9b9b9b]" />
-              <span className="text-sm font-medium text-[#9b9b9b]">Files</span>
-              {totalChanges > 0 && (
-                <span className="text-xs text-[#5b5b5b]">{totalChanges}</span>
-              )}
-            </div>
-            {filesExpanded ? (
-              <CaretDown className="w-3.5 h-3.5 text-[#5b5b5b]" />
-            ) : (
-              <CaretRight className="w-3.5 h-3.5 text-[#5b5b5b]" />
-            )}
-          </button>
-        )}
-
-        <AnimatePresence>
-          {filesExpanded && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="overflow-hidden"
-            >
-              {isLoading ? (
-                <div className="flex items-center justify-center h-32 text-[#6b6b6b]">
-                  <div className="animate-spin w-5 h-5 border-2 border-[#2a2a2a] border-t-[#d97757] rounded-full" />
-                </div>
-              ) : totalChanges === 0 ? (
-                <div className="flex flex-col items-center justify-center h-32 text-[#5b5b5b]">
-                  <GitCommit className="w-8 h-8 mb-2 opacity-50" />
-                  <p className="text-sm">No changes to review</p>
-                </div>
-              ) : (
-                <div className="py-2">
-                  {fileTree.map(item => renderFileChange(item))}
-                </div>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-
-      {/* Stats Footer */}
-      {totalChanges > 0 && status && (
-        <div className="px-4 py-3 border-t border-[#1a1a1a] flex items-center justify-between text-xs text-[#6b6b6b]">
-          <span>{totalChanges} files changed</span>
-          <div className="flex items-center gap-2">
-            {status.staged.length > 0 && (
-              <span className="text-[#4ade80]">{status.staged.length} staged</span>
-            )}
-            {status.modified.length > 0 && (
-              <span className="text-[#d97757]">{status.modified.length} modified</span>
-            )}
-            {status.untracked.length > 0 && (
-              <span className="text-[#6a9bcc]">{status.untracked.length} new</span>
-            )}
-          </div>
         </div>
       )}
 

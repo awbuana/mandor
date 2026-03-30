@@ -16,7 +16,18 @@ async fn open_app_window(app: tauri::AppHandle) {
 }
 
 fn main() {
-    tauri::Builder::default()
+    // Initialize CrabNebula DevTools as early as possible (debug builds only)
+    #[cfg(debug_assertions)]
+    let devtools = tauri_plugin_devtools::init();
+
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(devtools);
+    }
+
+    builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())

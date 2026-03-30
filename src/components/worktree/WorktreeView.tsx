@@ -83,8 +83,11 @@ export function WorktreeView({ worktree }: WorktreeViewProps) {
     }
   };
 
+  const [commitError, setCommitError] = useState<string | null>(null);
+
   const handleCommit = async () => {
     if (!commitMessage.trim()) return;
+    setCommitError(null);
     try {
       await invoke('commit', { 
         worktreePath: worktree.path,
@@ -94,6 +97,8 @@ export function WorktreeView({ worktree }: WorktreeViewProps) {
       loadStatus();
     } catch (error) {
       console.error('Failed to commit:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setCommitError(errorMessage || 'Failed to commit changes');
     }
   };
 
@@ -220,6 +225,9 @@ export function WorktreeView({ worktree }: WorktreeViewProps) {
               Commit
             </button>
           </div>
+          {commitError && (
+            <p className="mt-2 text-xs text-red-400">{commitError}</p>
+          )}
         </div>
       )}
     </motion.div>

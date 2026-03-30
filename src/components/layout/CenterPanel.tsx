@@ -124,18 +124,6 @@ export function CenterPanel() {
   // Get server for selected worktree
   const currentServer = selectedWorktree ? getOpencodeServer(selectedWorktree.path) : undefined
 
-  // Debug logging
-  useEffect(() => {
-    if (currentServer) {
-      console.log('Current server state:', {
-        isRunning: currentServer.isRunning,
-        sessionId: currentServer.sessionId,
-        port: currentServer.port,
-        hostname: currentServer.hostname
-      })
-    }
-  }, [currentServer])
-
   // Get worktree session (includes files and agent messages)
   const worktreeSession = selectedWorktree
     ? getWorktreeSession(selectedWorktree.path)
@@ -159,17 +147,9 @@ export function CenterPanel() {
   // Fetch available models when server starts
   useEffect(() => {
     if (currentServer?.isRunning && selectedWorktree && availableProviders.length === 0) {
-      console.log('Fetching providers for worktree:', selectedWorktree.path)
       fetchAgentModels(selectedWorktree.path)
     }
   }, [currentServer?.isRunning, selectedWorktree?.path, availableProviders.length])
-
-  // Debug logging for providers
-  useEffect(() => {
-    console.log('Available providers:', availableProviders)
-    console.log('Selected model:', selectedModel)
-    console.log('Selected provider ID:', selectedProviderId)
-  }, [availableProviders, selectedModel, selectedProviderId])
 
   // Start SSE stream when server starts
   useEffect(() => {
@@ -520,7 +500,6 @@ export function CenterPanel() {
     try {
       console.log('Sending message to session:', currentServer.sessionId)
       console.log('Server:', currentServer.hostname, currentServer.port)
-      console.log('Selected model:', selectedModel)
 
       // Extract provider and model IDs from "providerId/modelId" format
       const [providerId, modelId] = selectedModel ? selectedModel.split('/') : ['', '']

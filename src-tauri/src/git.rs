@@ -426,11 +426,15 @@ pub fn commit(worktree_path: String, message: String) -> Result<String, String> 
         .output()
         .map_err(|e| format!("Failed to commit: {}", e))?;
 
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        let error_msg = if stderr.is_empty() { stdout } else { stderr };
+        return Err(error_msg.to_string());
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(stdout.to_string())
 }
 
 #[tauri::command]
