@@ -9,9 +9,10 @@ import {
 } from '@phosphor-icons/react'
 import { AgentType, FileComment } from '@/types'
 import { InlineDiffViewer } from '@/components/diff/InlineDiffViewer'
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { listen, UnlistenFn } from '@tauri-apps/api/event'
+import { useSSE } from '@/hooks/useSSE'
+import { useSSEContext } from '@/contexts/SSEContext'
 
 
 type AgentTab = {
@@ -191,270 +192,163 @@ export function CenterPanel() {
     }
   }, [currentServer?.isRunning, selectedWorktree?.path, availableProviders.length])
 
-  // Start SSE stream when server starts
+  // Start SSE stream when server becomes running
+  const { startStream } = useSSEContext()
+  
   useEffect(() => {
-    if (!currentServer?.isRunning || !currentServer.sessionId || !selectedWorktree) {
+    if (currentServer?.isRunning && currentServer?.sessionId && selectedWorktree && currentServer.port !== null) {
+      startStream(currentServer.sessionId, selectedWorktree.path, currentServer.hostname, currentServer.port)
+    }
+  }, [currentServer?.isRunning, currentServer?.sessionId, selectedWorktree?.path, startStream])
+
+  const sessionId = currentServer?.sessionId
+
+  const handleSessionStatus = useCallback((status: 'busy' | 'idle') => {
+    if (!selectedWorktree) return
+
+    if (status === 'busy') {
+      activeMessageIds.forEach(id => finalizeStreamingMessage(selectedWorktree.path, id))
+      activeMessageIds.clear()
+    }
+  }, [selectedWorktree])
+
+  const handleSessionIdle = useCallback(() => {
+    if (!selectedWorktree) return
+
+    console.log('[SSE] Session idle, finalizing messages:', Array.from(activeMessageIds))
+    activeMessageIds.forEach(id => {
+      console.log('[SSE] Finalizing:', id)
+      finalizeStreamingMessage(selectedWorktree.path, id)
+    })
+    activeMessageIds.clear()
+    messageRoles.clear()
+    setAgentIsSending(selectedWorktree.path, false)
+  }, [selectedWorktree])
+
+  const handleQuestionAsked = useCallback((data: {
+    id: string
+    question: string
+    header: string
+    options: Array<{ label: string; description: string }>
+    callID: string
+  }) => {
+    if (!selectedWorktree) return
+
+    activeMessageIds.forEach(id => finalizeStreamingMessage(selectedWorktree.path, id))
+    activeMessageIds.clear()
+    messageRoles.clear()
+    setAgentIsSending(selectedWorktree.path, false)
+    setPendingQuestion(data)
+  }, [selectedWorktree])
+
+  const handleMessageUpdated = useCallback((data: { messageId: string; role: string }) => {
+    messageRoles.set(data.messageId, data.role)
+    if (data.role === 'assistant') {
+      isBusyRef.current = true
+    }
+  }, [])
+
+  const handleMessagePartDelta = useCallback((data: { partId: string; messageId: string; delta: string }) => {
+    if (!selectedWorktree) return
+
+    const storedRole = messageRoles.get(data.messageId)
+    
+    // If we don't have a role mapping yet (message.updated not received yet),
+    // or if the role is assistant, process the delta
+    if (!storedRole || storedRole === 'assistant') {
+      activeMessageIds.add(data.messageId)
+
+      const streamingMsg: Message = {
+        id: data.messageId,
+        messageId: data.messageId,
+        role: 'assistant' as const,
+        content: '',
+        timestamp: new Date(),
+        isStreaming: true,
+      }
+      upsertStreamingMessage(selectedWorktree.path, streamingMsg)
+      appendStreamingMessageDelta(selectedWorktree.path, data.messageId, data.delta)
+    }
+  }, [selectedWorktree])
+
+  const handleMessagePartUpdated = useCallback((data: {
+    partId: string
+    messageId: string
+    partType: string
+    text: string
+    tool?: string
+    callID?: string
+    state?: { status?: string; input?: Record<string, unknown>; output?: string }
+  }) => {
+    if (!selectedWorktree) return
+
+    const role = messageRoles.get(data.messageId)
+    if (role && role !== 'assistant') return
+
+    if (data.partType === 'tool') {
+      const toolStatus = (data.state?.status as 'pending' | 'running' | 'completed' | 'error') || 'pending'
+      console.log('[SSE] Tool call event:', { messageId: data.messageId, partId: data.partId, tool: data.tool, status: toolStatus })
+
+      const stateObj = data.state as { output?: string; error?: string; message?: string } | undefined
+      const toolOutput = stateObj?.output || stateObj?.error || stateObj?.message
+
+      const newToolCall: Message['toolCall'] = {
+        tool: data.tool || 'unknown',
+        callID: data.callID || '',
+        status: toolStatus,
+        input: data.state?.input as Record<string, unknown> | undefined,
+        output: toolOutput,
+      }
+
+      const streamingMsg: Message = {
+        id: data.messageId,
+        messageId: data.messageId,
+        role: 'assistant',
+        content: '',
+        timestamp: new Date(),
+        isStreaming: true,
+        type: 'tool',
+        toolCall: newToolCall,
+      }
+
+      console.log('[SSE] Upserting tool message:', { messageId: data.messageId, tool: newToolCall.tool, status: toolStatus })
+      activeMessageIds.add(data.messageId)
+      upsertStreamingMessage(selectedWorktree.path, streamingMsg)
       return
     }
 
-    let isStreamStarted = false
+    if (!data.text) return
 
-    const startStream = async () => {
-      if (isStreamStarted) return
-      isStreamStarted = true
-
-      try {
-        console.log('Starting SSE stream for session:', currentServer.sessionId)
-        await invoke('stream_opencode_events', {
-          hostname: currentServer.hostname,
-          port: currentServer.port,
-          sessionId: currentServer.sessionId,
-        })
-        console.log('SSE stream started successfully')
-      } catch (error) {
-        console.error('Failed to start SSE stream:', error)
-        isStreamStarted = false
-      }
+    const streamingMsg: Message = {
+      id: data.messageId,
+      messageId: data.messageId,
+      role: 'assistant',
+      content: data.text,
+      timestamp: new Date(),
+      isStreaming: true,
+      type: data.partType === 'reasoning' ? 'reasoning' : undefined,
     }
 
-    startStream()
-  }, [currentServer?.isRunning, currentServer?.sessionId, selectedWorktree?.path])
+    activeMessageIds.add(data.messageId)
+    upsertStreamingMessage(selectedWorktree.path, streamingMsg)
+  }, [selectedWorktree])
 
-  /**
-   * SSE Event Handler for OpenCode Agent
-   *
-   * Handles the following event types from the OpenCode agent:
-   *
-   * ## Session Events
-   * - `session.status` - Session state changed (busy/idle). When transitioning from idle to busy,
-   *   all active streaming messages are finalized to prepare for new content.
-   * - `session.idle` - Session has completed all tasks. All pending messages are finalized and
-   *   the UI is updated to reflect that the agent is no longer sending.
-   *
-   * ## Question Events
-   * - `question.asked` - Agent requires user input. Pending messages are finalized, agent stops
-   *   sending, and a pending question is set for the UI to display options to the user.
-   *
-   * ## Message Events
-   * - `message.updated` - A new message has been created by the agent. Sets the message role
-   *   in `messageRoles` map for later reference and marks the session as busy.
-   * - `message.part.delta` - Streaming text delta for a message part. Appends the delta to
-   *   the appropriate streaming message for the assistant role.
-   * - `message.part.updated` - A message part has been updated with new content. This handles:
-   *   - Tool calls (`partType === 'tool'`) - Creates/updates a tool call message with status
-   *     from 'pending' -> 'running' -> 'completed'/'error'
-   *   - Text content - Regular text streaming with `type: 'reasoning'` for thinking content
-   *
-   * ## Message Tracking
-   * `activeMessageIds` - Set of message IDs currently being streamed, used to track which
-   * messages need to be finalized when the session ends.
-   * `messageRoles` - Map of message IDs to their roles ('user'/'assistant'), used to determine
-   * how to handle streaming deltas and updates.
-   * `isBusy` - Flag indicating if the agent is currently processing/responding.
-   */
-  useEffect(() => {
-    if (!selectedWorktree) return
+  const activeMessageIdsRef = useRef(new Set<string>())
+  const messageRolesRef = useRef(new Map<string, string>())
+  const isBusyRef = useRef(false)
 
-    let unlisten: UnlistenFn | undefined
-    let activeMessageIds = new Set<string>()
-    let messageRoles = new Map<string, string>()
-    let isBusy = false
+  const activeMessageIds = activeMessageIdsRef.current
+  const messageRoles = messageRolesRef.current
 
-    const setupListener = async () => {
-      unlisten = await listen<{
-        session_id: string
-        event: string
-        data: {
-          type?: string
-          properties?: {
-            status?: { type?: string }
-            part?: {
-              id?: string
-              messageID?: string
-              text?: string
-              type?: string
-              tool?: string
-              callID?: string
-              state?: {
-                status?: string
-                input?: Record<string, unknown>
-              }
-            }
-          }
-        }
-      }>('opencode-event', (event) => {
-        const { data } = event.payload
-
-        if (data?.type === 'session.status') {
-          const wasBusy = isBusy
-          isBusy = data?.properties?.status?.type === 'busy'
-          if (isBusy && !wasBusy) {
-            activeMessageIds.forEach(id => finalizeStreamingMessage(selectedWorktree.path, id))
-            activeMessageIds.clear()
-          }
-          return
-        }
-
-        if (data?.type === 'session.idle') {
-          console.log('[SSE] Session idle, finalizing messages:', Array.from(activeMessageIds))
-          activeMessageIds.forEach(id => {
-            console.log('[SSE] Finalizing:', id)
-            finalizeStreamingMessage(selectedWorktree.path, id)
-          })
-          activeMessageIds.clear()
-          messageRoles.clear()
-          setAgentIsSending(selectedWorktree.path, false)
-          isBusy = false
-          return
-        }
-
-        if (data?.type === 'question.asked') {
-          activeMessageIds.forEach(id => finalizeStreamingMessage(selectedWorktree.path, id))
-          activeMessageIds.clear()
-          messageRoles.clear()
-          setAgentIsSending(selectedWorktree.path, false)
-          isBusy = false
-
-          const props = data?.properties as Record<string, unknown>
-          const questions = (props?.questions as Array<{
-            question?: string
-            header?: string
-            options?: Array<{ label?: string; description?: string }>
-          }>) || []
-          const tool = props?.tool as { messageID?: string; callID?: string } | undefined
-
-          if (questions.length > 0) {
-            const q = questions[0]
-            setPendingQuestion({
-              id: props?.id as string || '',
-              question: q.question || '',
-              header: q.header || '',
-              options: (q.options || []).map(o => ({ label: o.label || '', description: o.description || '' })),
-              callID: tool?.callID || '',
-            })
-          }
-          return
-        }
-
-        if (data?.type === 'message.updated') {
-          const props = data?.properties as Record<string, unknown> | undefined
-          const info = props?.info as Record<string, unknown> | undefined
-          const msgId = info?.id as string | undefined
-          const role = info?.role as string | undefined
-
-          if (msgId && role) {
-            messageRoles.set(msgId, role)
-            if (role === 'assistant') {
-              isBusy = true
-            }
-          }
-          return
-        }
-
-        if (data?.type === 'message.part.delta') {
-          const props = data?.properties as Record<string, unknown> | undefined
-          const partId = props?.partID as string | undefined
-          const messageId = props?.messageID as string | undefined
-          const field = props?.field as string | undefined
-          const delta = props?.delta as string | undefined
-
-          if (partId && field === 'text' && delta && messageId) {
-            const role = messageRoles.get(messageId)
-            if (role === 'assistant') {
-              activeMessageIds.add(partId)
-
-              const streamingMsg: Message = {
-                id: partId,
-                messageId: partId,
-                role: 'assistant',
-                content: '',
-                timestamp: new Date(),
-                isStreaming: true,
-              }
-              upsertStreamingMessage(selectedWorktree.path, streamingMsg)
-              appendStreamingMessageDelta(selectedWorktree.path, partId, delta)
-            }
-          }
-          return
-        }
-
-        if (!isBusy) {
-          console.log('[SSE] Skipping event - not busy:', data?.type)
-          return
-        }
-
-        if (data?.type !== 'message.part.updated') return
-
-        const part = data?.properties?.part
-        const partType = part?.type
-        const text = part?.text || ''
-        const partMsgId = part?.messageID as string | undefined
-        const role = partMsgId ? messageRoles.get(partMsgId) : undefined
-
-        if (role !== 'assistant') return
-
-        const partId = part?.id || part?.messageID || `msg-${Date.now()}`
-
-        if (partType === 'tool') {
-          const toolStatus = (part?.state?.status as 'pending' | 'running' | 'completed' | 'error') || 'pending'
-          const toolName = part?.tool as string | undefined
-          console.log('[SSE] Tool call event:', { partId, tool: toolName, partType, status: toolStatus, stateKeys: part?.state ? Object.keys(part.state) : [] })
-          
-          // Try to get output or error message from state
-          const stateObj = part?.state as { output?: string; error?: string; message?: string } | undefined
-          const toolOutput = stateObj?.output || stateObj?.error || stateObj?.message
-          
-          const newToolCall: Message['toolCall'] = {
-            tool: toolName || 'unknown',
-            callID: part?.callID || '',
-            status: toolStatus,
-            input: part?.state?.input as Record<string, unknown> | undefined,
-            output: toolOutput,
-          }
-
-          const streamingMsg: Message = {
-            id: partId,
-            messageId: partId,
-            role: 'assistant',
-            content: '',
-            timestamp: new Date(),
-            isStreaming: true,
-            type: 'tool',
-            toolCall: newToolCall,
-          }
-
-          console.log('[SSE] Upserting tool message:', { id: partId, tool: newToolCall.tool, status: toolStatus, input: newToolCall.input })
-          activeMessageIds.add(partId)
-          upsertStreamingMessage(selectedWorktree.path, streamingMsg)
-          return
-        }
-
-        if (!text) return
-
-        const streamingMsg: Message = {
-          id: partId,
-          messageId: partId,
-          role: 'assistant',
-          content: text,
-          timestamp: new Date(),
-          isStreaming: true,
-          type: partType === 'reasoning' ? 'reasoning' : undefined,
-        }
-
-        // Track message ID for later finalization when session ends
-        activeMessageIds.add(partId)
-        upsertStreamingMessage(selectedWorktree.path, streamingMsg)
-      })
-    }
-
-    setupListener()
-
-    return () => {
-      if (unlisten) {
-        unlisten()
-      }
-    }
-  }, [selectedWorktree?.path])
+  useSSE({
+    sessionId: sessionId || '',
+    onSessionStatus: handleSessionStatus,
+    onSessionIdle: handleSessionIdle,
+    onQuestionAsked: handleQuestionAsked,
+    onMessageUpdated: handleMessageUpdated,
+    onMessagePartDelta: handleMessagePartDelta,
+    onMessagePartUpdated: handleMessagePartUpdated,
+  })
 
   // Parse diff from string
   const parseDiff = (diff: string): DiffLine[] => {

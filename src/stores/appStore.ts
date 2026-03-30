@@ -487,9 +487,9 @@ export const useAppStore = create<AppState>((set, get) => ({
             ...currentSession.agent,
             streamingMessages: {
               ...currentSession.agent.streamingMessages,
-              [messageId]: { 
-                ...existingMessage, 
-                content: existingMessage.content + delta 
+              [messageId]: {
+                ...existingMessage,
+                content: existingMessage.content + delta
               },
             },
           }
@@ -589,9 +589,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       const result = await invoke('get_opencode_providers', {
         hostname: server.hostname,
         port: server.port,
-      }) as { 
-        all: Array<{ 
-          id: string; 
+      }) as {
+        all: Array<{
+          id: string;
           name: string;
           models: Record<string, { id: string; name: string }>;
         }>;
@@ -601,15 +601,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.log('Providers response:', result);
 
       // Filter to only connected providers
-      const connectedProviders = result.all?.filter((provider: { id: string }) => 
+      const connectedProviders = result.all?.filter((provider: { id: string }) =>
         result.connected?.includes(provider.id)
       ) || [];
 
-      console.log('Connected providers:', connectedProviders);
-
       // Update available providers
       get().setAgentAvailableProviders(worktreePath, connectedProviders);
-      
+
       // Set default model if none selected (use first model from first provider)
       const currentSession = get().worktreeSessions[worktreePath];
       if (!currentSession?.agent.selectedModel && connectedProviders.length > 0) {
@@ -696,7 +694,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       set((state) => {
         const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
-        
+
         return {
           opencodeServers: {
             ...state.opencodeServers,
@@ -723,7 +721,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.error('Failed to start opencode server:', error);
       set((state) => {
         const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
-        
+
         return {
           opencodeServers: {
             ...state.opencodeServers,
@@ -773,7 +771,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     set((state) => {
       const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
-      
+
       return {
         opencodeServers: {
           ...state.opencodeServers,
