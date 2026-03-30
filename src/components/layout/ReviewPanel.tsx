@@ -1,5 +1,5 @@
 import { useAppStore } from '@/stores/appStore'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { 
   GitBranch,
   ArrowUp,
@@ -10,11 +10,16 @@ import {
   CaretRight,
   CaretDown,
   GitCommit,
-  Circle
+  Circle,
+  ChatText,
+  Check,
+  X,
+  Robot
 } from '@phosphor-icons/react'
 import { useState, useEffect, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { FileStatus } from '@/types'
+import { FileStatus, FileComment } from '@/types'
+import { cn } from '@/lib/utils'
 
 
 interface FileChange {
@@ -116,11 +121,14 @@ function buildFileTree(files: { path: string; status: FileChange['status']; file
 }
 
 export function ReviewPanel() {
-  const { selectedWorktree, worktreeStatus, setWorktreeStatus, openFile } = useAppStore()
+  const { selectedWorktree, worktreeStatus, setWorktreeStatus, openFile, getAllComments, resolveComment, removeComment, getOpencodeServer, addAgentMessage, setAgentIsSending } = useAppStore()
   const [commitMessage, setCommitMessage] = useState('')
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [commentsExpanded, setCommentsExpanded] = useState(true)
+  const [filesExpanded, setFilesExpanded] = useState(true)
+  const [implementingFile, setImplementingFile] = useState<string | null>(null)
 
   // Load worktree status when selected worktree changes
   useEffect(() => {
@@ -221,6 +229,69 @@ export function ReviewPanel() {
         return <Plus className="w-3.5 h-3.5 text-[#6a9bcc]" />
       default:
         return <Circle className="w-2 h-2 rounded-full bg-[#d97757]" weight="fill" />
+    }
+  }
+
+  /**
+   * Sends unresolved comments to the opencode agent to implement feedback.
+   * Constructs a prompt from user comments and sends it as a chat message.
+   */
+  const handleImplementFeedback = async (filePath: string, comments: FileComment[]) => {
+    if (!selectedWorktree) return
+
+    const server = getOpencodeServer(selectedWorktree.path)
+    if (!server?.isRunning || !server.sessionId) {
+      console.error('Opencode server not running')
+      return
+    }
+
+    setImplementingFile(filePath)
+
+    // Build the prompt with all comments for this file
+    const unresolvedComments = comments.filter(c => !c.resolved && c.author === 'user')
+    if (unresolvedComments.length === 0) {
+      setImplementingFile(null)
+      return
+    }
+
+    // TODO: Improve this prompt to include more context (e.g., file content, surrounding code)
+    const promptLines = [
+      `Please implement the following feedback for file: ${filePath}`,
+      '',
+      ...unresolvedComments.map((comment, idx) => {
+        const lineInfo = comment.lineNumber ? ` (Line ${comment.lineNumber})` : ''
+        return `${idx + 1}.${lineInfo} ${comment.content}`
+      }),
+      '',
+      'Please make the necessary changes to address all these comments.'
+    ]
+
+    const prompt = promptLines.join('\n')
+
+    // Add user message to the chat
+    const userMessage = {
+      id: Date.now().toString(),
+      role: 'user' as const,
+      content: prompt,
+      timestamp: new Date()
+    }
+
+    addAgentMessage(selectedWorktree.path, userMessage)
+    setAgentIsSending(selectedWorktree.path, true)
+
+    try {
+      await invoke('send_opencode_message_async', {
+        hostname: server.hostname,
+        port: server.port,
+        sessionId: server.sessionId,
+        message: prompt,
+        providerId: null,
+        modelId: null,
+      })
+    } catch (error) {
+      console.error('Failed to send implementation request:', error)
+    } finally {
+      setImplementingFile(null)
     }
   }
 
@@ -335,22 +406,191 @@ export function ReviewPanel() {
         )}
       </div>
 
-      {/* File Changes */}
+      {/* Comments Section */}
+      {selectedWorktree && (
+        <div className="border-b border-[#1a1a1a]">
+          <button
+            onClick={() => setCommentsExpanded(!commentsExpanded)}
+            className="w-full flex items-center justify-between px-4 py-2 hover:bg-[#111111] transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <ChatText className="w-4 h-4 text-[#9b9b9b]" />
+              <span className="text-sm font-medium text-[#9b9b9b]">Comments</span>
+              {(() => {
+                const allComments = getAllComments(selectedWorktree.path)
+                const unresolvedCount = allComments.filter(c => !c.resolved).length
+                return unresolvedCount > 0 && (
+                  <span className="text-xs bg-[#d97757] text-white px-1.5 py-0.5 rounded-full">
+                    {unresolvedCount}
+                  </span>
+                )
+              })()}
+            </div>
+            {commentsExpanded ? (
+              <CaretDown className="w-3.5 h-3.5 text-[#5b5b5b]" />
+            ) : (
+              <CaretRight className="w-3.5 h-3.5 text-[#5b5b5b]" />
+            )}
+          </button>
+
+          <AnimatePresence>
+            {commentsExpanded && selectedWorktree && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="overflow-hidden"
+              >
+                <div className="px-4 py-2 space-y-2 max-h-64 overflow-y-auto">
+                  {(() => {
+                    const allComments = getAllComments(selectedWorktree.path)
+                    if (allComments.length === 0) {
+                      return (
+                        <p className="text-xs text-[#5b5b5b] py-2">No comments yet</p>
+                      )
+                    }
+
+                    // Group comments by file
+                    const commentsByFile = allComments.reduce((acc, comment) => {
+                      if (!acc[comment.filePath]) {
+                        acc[comment.filePath] = []
+                      }
+                      acc[comment.filePath].push(comment)
+                      return acc
+                    }, {} as Record<string, FileComment[]>)
+
+                    return Object.entries(commentsByFile).map(([filePath, comments]) => {
+                      const userComments = comments.filter(c => !c.resolved && c.author === 'user')
+                      const hasUserComments = userComments.length > 0
+
+                      return (
+                      <div key={filePath} className="mb-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <button
+                            onClick={() => openFile(selectedWorktree.path, filePath)}
+                            className="text-xs text-[#6b6b6b] hover:text-[#9b9b9b] truncate text-left flex-1"
+                          >
+                            {filePath}
+                          </button>
+                          {hasUserComments && (
+                            <button
+                              onClick={() => handleImplementFeedback(filePath, comments)}
+                              disabled={implementingFile === filePath}
+                              className={cn(
+                                'ml-2 flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-all',
+                                implementingFile === filePath
+                                  ? 'bg-[#2a2a2a] text-[#5b5b5b] cursor-wait'
+                                  : 'bg-[#d97757]/10 text-[#d97757] hover:bg-[#d97757]/20 border border-[#d97757]/30'
+                              )}
+                            >
+                              <Robot className={cn('w-3 h-3', implementingFile === filePath && 'animate-pulse')} />
+                              {implementingFile === filePath ? 'Working...' : `Implement (${userComments.length})`}
+                            </button>
+                          )}
+                        </div>
+                        <div className="space-y-1">
+                          {comments.filter(c => !c.resolved).map(comment => (
+                            <div
+                              key={comment.id}
+                              className={cn(
+                                'text-xs p-2 rounded border',
+                                comment.author === 'user'
+                                  ? 'bg-[#d97757]/10 border-[#d97757]/20'
+                                  : 'bg-[#1a1a1a] border-[#2a2a2a]'
+                              )}
+                            >
+                              <div className="flex items-center justify-between mb-1">
+                                <span className={cn(
+                                  'text-[10px] uppercase',
+                                  comment.author === 'user' ? 'text-[#d97757]' : 'text-[#9b9b9b]'
+                                )}>
+                                  {comment.author === 'user' ? 'You' : 'Agent'}
+                                </span>
+                                {comment.lineNumber && (
+                                  <span className="text-[10px] text-[#5b5b5b]">
+                                    Line {comment.lineNumber}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[#e0e0e0] line-clamp-2">{comment.content}</p>
+                              <div className="flex items-center justify-end gap-1 mt-1">
+                                <button
+                                  onClick={() => resolveComment(selectedWorktree.path, filePath, comment.id)}
+                                  className="p-1 rounded hover:bg-[#2a3a2a] text-[#57d977]"
+                                  title="Resolve"
+                                >
+                                  <Check className="w-3 h-3" />
+                                </button>
+                                <button
+                                  onClick={() => removeComment(selectedWorktree.path, filePath, comment.id)}
+                                  className="p-1 rounded hover:bg-[#3a2a2a] text-[#d97757]"
+                                  title="Delete"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )})
+                  })()}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
+
+      {/* Files Section */}
       <div className="flex-1 overflow-auto">
-        {isLoading ? (
-          <div className="flex items-center justify-center h-32 text-[#6b6b6b]">
-            <div className="animate-spin w-5 h-5 border-2 border-[#2a2a2a] border-t-[#d97757] rounded-full" />
-          </div>
-        ) : totalChanges === 0 ? (
-          <div className="flex flex-col items-center justify-center h-32 text-[#5b5b5b]">
-            <GitCommit className="w-8 h-8 mb-2 opacity-50" />
-            <p className="text-sm">No changes to review</p>
-          </div>
-        ) : (
-          <div className="py-2">
-            {fileTree.map(item => renderFileChange(item))}
-          </div>
+        {selectedWorktree && (
+          <button
+            onClick={() => setFilesExpanded(!filesExpanded)}
+            className="w-full flex items-center justify-between px-4 py-2 hover:bg-[#111111] transition-colors border-b border-[#1a1a1a]"
+          >
+            <div className="flex items-center gap-2">
+              <Folder className="w-4 h-4 text-[#9b9b9b]" />
+              <span className="text-sm font-medium text-[#9b9b9b]">Files</span>
+              {totalChanges > 0 && (
+                <span className="text-xs text-[#5b5b5b]">{totalChanges}</span>
+              )}
+            </div>
+            {filesExpanded ? (
+              <CaretDown className="w-3.5 h-3.5 text-[#5b5b5b]" />
+            ) : (
+              <CaretRight className="w-3.5 h-3.5 text-[#5b5b5b]" />
+            )}
+          </button>
         )}
+
+        <AnimatePresence>
+          {filesExpanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="overflow-hidden"
+            >
+              {isLoading ? (
+                <div className="flex items-center justify-center h-32 text-[#6b6b6b]">
+                  <div className="animate-spin w-5 h-5 border-2 border-[#2a2a2a] border-t-[#d97757] rounded-full" />
+                </div>
+              ) : totalChanges === 0 ? (
+                <div className="flex flex-col items-center justify-center h-32 text-[#5b5b5b]">
+                  <GitCommit className="w-8 h-8 mb-2 opacity-50" />
+                  <p className="text-sm">No changes to review</p>
+                </div>
+              ) : (
+                <div className="py-2">
+                  {fileTree.map(item => renderFileChange(item))}
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Stats Footer */}

@@ -9,7 +9,8 @@ import {
   FileCode,
   Play
 } from '@phosphor-icons/react'
-import { AgentType } from '@/types'
+import { AgentType, FileComment } from '@/types'
+import { InlineDiffViewer } from '@/components/diff/InlineDiffViewer'
 import { useState, useRef, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
@@ -105,6 +106,10 @@ export function CenterPanel() {
     finalizeStreamingMessage,
     clearStreamingMessages,
     appendStreamingMessageDelta,
+    addComment,
+    removeComment,
+    resolveComment,
+    getFileComments,
   } = useAppStore()
 
   const [activeTab, setActiveTab] = useState<string>('codex')
@@ -819,11 +824,11 @@ export function CenterPanel() {
                   const fileName = getFileName(file)
 
                   return (
-                    <button
+                    <div
                       key={file}
                       onClick={() => selectedWorktree && setActiveFile(selectedWorktree.path, file)}
                       className={cn(
-                        "flex items-center gap-2 px-4 py-2 text-sm border-r border-[#1a1a1a] min-w-fit",
+                        "flex items-center gap-2 px-4 py-2 text-sm border-r border-[#1a1a1a] min-w-fit cursor-pointer",
                         isActive
                           ? "bg-[#1a1a1a] text-[#e0e0e0]"
                           : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
@@ -839,7 +844,7 @@ export function CenterPanel() {
                       >
                         <X className="w-3 h-3" />
                       </button>
-                    </button>
+                    </div>
                   )
                 })}
               </div>
@@ -876,45 +881,33 @@ export function CenterPanel() {
                       </div>
                     </div>
 
-                    {/* Diff Content */}
-                    <div className="flex-1 overflow-auto">
-                      <div className="font-mono text-sm">
-                        {diffContent.map((line, idx) => (
-                          <div key={idx} className="flex hover:bg-[#1a1a1a]/50">
-                            {/* Line Numbers */}
-                            <div className="flex w-20 text-xs text-[#4a4a4a] select-none bg-[#0f0f0f] border-r border-[#1a1a1a]">
-                              <span className="w-10 text-right pr-2 py-0.5">
-                                {line.oldLine || ''}
-                              </span>
-                              <span className="w-10 text-right pr-2 py-0.5">
-                                {line.newLine || ''}
-                              </span>
-                            </div>
-
-                            {/* Content */}
-                            <div className={`
-                              flex-1 py-0.5 pl-3 pr-4 whitespace-pre
-                              ${line.type === 'add' ? 'bg-[#1a3a1a]/30 text-[#4ade80]' : ''}
-                              ${line.type === 'remove' ? 'bg-[#3a1a1a]/30 text-[#f87171]' : ''}
-                              ${line.type === 'header' ? 'text-[#6b6b6b] bg-[#1a1a1a]/50' : ''}
-                              ${line.type === 'context' ? 'text-[#9b9b9b]' : ''}
-                            `}>
-                              {/* Line indicator */}
-                              <span className={`
-                                inline-block w-4 mr-2 select-none
-                                ${line.type === 'add' ? 'text-[#4ade80]' : ''}
-                                ${line.type === 'remove' ? 'text-[#f87171]' : ''}
-                                ${line.type === 'context' ? 'text-[#4a4a4a]' : ''}
-                              `}>
-                                {line.type === 'add' && '+'}
-                                {line.type === 'remove' && '-'}
-                                {line.type === 'context' && ' '}
-                              </span>
-                              {line.content.slice(1)}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                    {/* Diff Content with Inline Comments */}
+                    <div className="flex-1 overflow-auto bg-[#0a0a0a]">
+                      {selectedWorktree && activeFile && (
+                        <InlineDiffViewer
+                          diffContent={diffContent}
+                          filePath={activeFile}
+                          comments={getFileComments(selectedWorktree.path, activeFile)}
+                          onAddComment={(lineNumber: number, content: string) => {
+                            const newComment: FileComment = {
+                              id: `comment-${Date.now()}`,
+                              filePath: activeFile,
+                              lineNumber,
+                              author: 'user',
+                              content,
+                              timestamp: new Date(),
+                              resolved: false,
+                            }
+                            addComment(selectedWorktree.path, newComment)
+                          }}
+                          onResolveComment={(commentId: string) => {
+                            resolveComment(selectedWorktree.path, activeFile, commentId)
+                          }}
+                          onDeleteComment={(commentId: string) => {
+                            removeComment(selectedWorktree.path, activeFile, commentId)
+                          }}
+                        />
+                      )}
                     </div>
                   </>
                 )

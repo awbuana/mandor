@@ -1,6 +1,9 @@
 import { create } from 'zustand';
-import { Worktree, TerminalSession, WorktreeStatus } from '@/types';
+import { Worktree, TerminalSession, WorktreeStatus, FileComment } from '@/types';
 
+/**
+ * Represents an instance of the opencode server running for a specific worktree
+ */
 export interface OpencodeServerInstance {
   worktreePath: string;
   worktreeName: string;
@@ -50,8 +53,13 @@ export interface WorktreeSession {
       isRunning: boolean;
     };
   };
+  // File comments for code review
+  comments: Record<string, FileComment[]>;
 }
 
+/**
+ * Main application state interface containing all global state
+ */
 interface AppState {
   // Repository
   currentRepoPath: string | null;
@@ -118,6 +126,13 @@ interface AppState {
   finalizeStreamingMessage: (worktreePath: string, messageId: string) => void;
   clearStreamingMessages: (worktreePath: string) => void;
 
+  // File comment actions (per worktree)
+  addComment: (worktreePath: string, comment: FileComment) => void;
+  removeComment: (worktreePath: string, filePath: string, commentId: string) => void;
+  resolveComment: (worktreePath: string, filePath: string, commentId: string) => void;
+  getFileComments: (worktreePath: string, filePath: string) => FileComment[];
+  getAllComments: (worktreePath: string) => FileComment[];
+
   // Opencode Server Actions
   getOpencodeServer: (worktreePath: string) => OpencodeServerInstance | undefined;
   setOpencodeServer: (worktreePath: string, state: Partial<OpencodeServerInstance>) => void;
@@ -143,8 +158,13 @@ const createDefaultSession = (): WorktreeSession => ({
     availableProviders: [],
     opencodeSession: undefined,
   },
+  comments: {},
 });
 
+/**
+ * Main application state store using Zustand
+ * Contains all global state for worktrees, terminals, agent sessions, and UI state
+ */
 export const useAppStore = create<AppState>((set, get) => ({
   currentRepoPath: null,
   worktrees: [],
@@ -771,6 +791,84 @@ export const useAppStore = create<AppState>((set, get) => ({
         },
       };
     });
+  },
+
+  // File comment actions
+  addComment: (worktreePath: string, comment: FileComment) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+    const fileComments = currentSession.comments[comment.filePath] || [];
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          comments: {
+            ...currentSession.comments,
+            [comment.filePath]: [...fileComments, comment],
+          },
+        },
+      },
+    };
+  }),
+
+  // Remove a comment from a file by its ID
+  removeComment: (worktreePath: string, filePath: string, commentId: string) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+    const fileComments = currentSession.comments[filePath] || [];
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          comments: {
+            ...currentSession.comments,
+            [filePath]: fileComments.filter(c => c.id !== commentId),
+          },
+        },
+      },
+    };
+  }),
+
+  resolveComment: (worktreePath: string, filePath: string, commentId: string) => set((state) => {
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+    const fileComments = currentSession.comments[filePath] || [];
+
+    return {
+      worktreeSessions: {
+        ...state.worktreeSessions,
+        [worktreePath]: {
+          ...currentSession,
+          comments: {
+            ...currentSession.comments,
+            [filePath]: fileComments.map(c =>
+              c.id === commentId ? { ...c, resolved: true } : c
+            ),
+          },
+        },
+      },
+    };
+  }),
+
+  /**
+   * Retrieves all comments for a specific file in a worktree session.
+   * Returns an empty array if no comments exist for the file.
+   *
+   * @param worktreePath - The path to the worktree
+   * @param filePath - The path to the file within the worktree
+   * @returns Array of comments for the specified file
+   */
+  getFileComments: (worktreePath: string, filePath: string) => {
+    const state = get();
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+    return currentSession.comments[filePath] || [];
+  },
+
+  getAllComments: (worktreePath: string) => {
+    const state = get();
+    const currentSession = state.worktreeSessions[worktreePath] || createDefaultSession();
+    return Object.values(currentSession.comments).flat();
   },
 
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),

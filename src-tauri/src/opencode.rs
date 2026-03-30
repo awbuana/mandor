@@ -506,7 +506,19 @@ async fn stream_events_loop(
                     }
 
                     if !event_data.is_empty() {
-                        println!("[SSE] Received event: {} with data: {}", event_name, event_data);
+                        // Skip logging events with large diffs to reduce noise
+                        let should_log = !event_data.contains("session.diff") && 
+                                         !event_data.contains("\"diffs\":[");
+                        
+                        if should_log {
+                            // Truncate large event data for logging
+                            let log_data = if event_data.len() > 500 {
+                                format!("{}... (truncated, {} bytes)", &event_data[..500], event_data.len())
+                            } else {
+                                event_data.clone()
+                            };
+                            println!("[SSE] Received event: {} with data: {}", event_name, log_data);
+                        }
 
                         if let Ok(json_data) = serde_json::from_str::<serde_json::Value>(&event_data) {
                             let emit_result = window.emit("opencode-event", serde_json::json!({
