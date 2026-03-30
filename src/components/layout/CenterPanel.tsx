@@ -89,7 +89,7 @@ interface PendingQuestion {
 }
 
 function formatReadGrepInput(input: Record<string, unknown> | undefined): string {
-  if (!input) return 'unknown'
+  if (!input) return ''
 
   const filePath = input.path as string || input.file as string || input.filePath as string || ''
   const filename = filePath.split('/').pop() || filePath
@@ -843,7 +843,7 @@ export function CenterPanel() {
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-xs text-[#d97757] uppercase font-mono">{message.toolCall.tool}</span>
                               <span className="text-xs text-[#6b6b6b] font-mono">
-                                {message.toolCall.tool === 'read' || message.toolCall.tool === 'grep'
+                                {message.toolCall.tool === 'read'
                                   ? formatReadGrepInput(message.toolCall.input)
                                   : JSON.stringify(message.toolCall.input || {})}
                               </span>
