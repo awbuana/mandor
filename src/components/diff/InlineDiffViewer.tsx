@@ -178,7 +178,7 @@ export function InlineDiffViewer({
             const lineNumber = line.newLine || line.oldLine || index
             const lineComments = isHeader ? [] : getCommentsForLine(lineNumber)
             const isAddingComment = activeCommentLine === lineNumber
-            const isHovered = hoveredLine === lineNumber && !isHeader
+            const isHovered = hoveredLine === index && !isHeader
             const showComments = lineComments.length > 0 || isAddingComment
 
             return (
@@ -190,7 +190,7 @@ export function InlineDiffViewer({
                     line.type === 'remove' && 'bg-[#3a1a1a]/20',
                     isHovered && 'bg-[#1a1a1a]'
                   )}
-                  onMouseEnter={() => !isHeader && setHoveredLine(lineNumber)}
+                  onMouseEnter={() => !isHeader && setHoveredLine(index)}
                   onMouseLeave={() => setHoveredLine(null)}
                 >
                   <div
