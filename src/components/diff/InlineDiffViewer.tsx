@@ -15,6 +15,7 @@ interface InlineDiffViewerProps {
   diffContent: DiffLine[]
   filePath: string
   comments: FileComment[]
+  zoom?: number
   onAddComment: (lineNumber: number, content: string) => void
   onResolveComment: (commentId: string) => void
   onDeleteComment: (commentId: string) => void
@@ -147,8 +148,9 @@ function InlineCommentInput({ onSubmit, onCancel }: InlineCommentInputProps) {
 
 export function InlineDiffViewer({
   diffContent,
-  filePath,
+  filePath: _filePath,
   comments,
+  zoom = 100,
   onAddComment,
   onResolveComment,
   onDeleteComment,
@@ -166,12 +168,11 @@ export function InlineDiffViewer({
   }
 
   return (
-    <div className="bg-[#0a0a0a] rounded-lg overflow-hidden">
-      <div className="px-4 py-3 bg-[#1a1a1a] border-b border-[#0f0f0f]">
-        <span className="text-sm text-[#e0e0e0] font-mono">{filePath}</span>
-      </div>
-      <div className="overflow-x-auto">
-        <div className="min-w-full font-mono text-sm">
+    <div className="bg-[#0a0a0a] h-full overflow-auto">
+      <div 
+        className="min-w-full font-mono transition-all duration-200"
+        style={{ fontSize: `${zoom}%` }}
+      >
           {diffContent.map((line, index) => {
             const isHeader = line.type === 'header'
             const lineNumber = line.newLine || line.oldLine || index
@@ -276,7 +277,6 @@ export function InlineDiffViewer({
               </div>
             )
           })}
-        </div>
       </div>
     </div>
   )

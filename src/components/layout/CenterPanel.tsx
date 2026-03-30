@@ -117,6 +117,7 @@ export function CenterPanel() {
   const [diffContent, setDiffContent] = useState<DiffLine[]>([])
   const [loadingDiff, setLoadingDiff] = useState(false)
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
+  const [diffZoom, setDiffZoom] = useState<number>(50)
   const terminalRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -871,22 +872,44 @@ export function CenterPanel() {
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-3 text-xs">
-                        <span className="flex items-center gap-1 text-[#4ade80]">
-                          +{addedCount}
-                        </span>
-                        <span className="flex items-center gap-1 text-[#f87171]">
-                          -{removedCount}
-                        </span>
+                      <div className="flex items-center gap-4">
+                        {/* Zoom Controls */}
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => setDiffZoom(z => Math.max(50, z - 10))}
+                            className="px-2 py-1 text-xs bg-[#1a1a1a] hover:bg-[#2a2a2a] rounded text-[#9b9b9b] transition-colors"
+                            title="Zoom out"
+                          >
+                            −
+                          </button>
+                          <span className="text-xs text-[#6b6b6b] w-10 text-center">{diffZoom}%</span>
+                          <button
+                            onClick={() => setDiffZoom(z => Math.min(200, z + 10))}
+                            className="px-2 py-1 text-xs bg-[#1a1a1a] hover:bg-[#2a2a2a] rounded text-[#9b9b9b] transition-colors"
+                            title="Zoom in"
+                          >
+                            +
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-3 text-xs">
+                          <span className="flex items-center gap-1 text-[#4ade80]">
+                            +{addedCount}
+                          </span>
+                          <span className="flex items-center gap-1 text-[#f87171]">
+                            -{removedCount}
+                          </span>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Diff Content with Inline Comments */}
-                    <div className="flex-1 overflow-auto bg-[#0a0a0a]">
+                    {/* Diff Content with Inline Comments - Single scroll container */}
+                    <div className="flex-1 bg-[#0a0a0a] overflow-hidden">
                       {selectedWorktree && activeFile && (
                         <InlineDiffViewer
                           diffContent={diffContent}
                           filePath={activeFile}
+                          zoom={diffZoom}
                           comments={getFileComments(selectedWorktree.path, activeFile)}
                           onAddComment={(lineNumber: number, content: string) => {
                             const newComment: FileComment = {
