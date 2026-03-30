@@ -1,7 +1,7 @@
 import { useAppStore } from '@/stores/appStore'
 import { cn } from '@/lib/utils'
 import { motion } from 'framer-motion'
-import { 
+import {
   X,
   Terminal,
   Command,
@@ -68,9 +68,9 @@ const AGENT_TABS: AgentTab[] = [
 
 // Mock agent info
 const AGENT_INFO: Record<string, { version: string; model: string; subtitle: string; path: string }> = {
-  codex: { 
-    version: 'v1.0.0', 
-    model: 'AI Assistant', 
+  codex: {
+    version: 'v1.0.0',
+    model: 'AI Assistant',
     subtitle: 'OpenCode Agent',
     path: '~'
   },
@@ -83,10 +83,10 @@ const getWorktreeNameFromPath = (path: string): string => {
 }
 
 export function CenterPanel() {
-  const { 
-    terminals, 
-    addTerminal, 
-    removeTerminal, 
+  const {
+    terminals,
+    addTerminal,
+    removeTerminal,
     setActiveTerminal,
     selectedWorktree,
     activeView,
@@ -104,6 +104,7 @@ export function CenterPanel() {
     upsertStreamingMessage,
     finalizeStreamingMessage,
     clearStreamingMessages,
+    appendStreamingMessageDelta,
   } = useAppStore()
 
   const [activeTab, setActiveTab] = useState<string>('codex')
@@ -116,7 +117,7 @@ export function CenterPanel() {
 
   // Get server for selected worktree
   const currentServer = selectedWorktree ? getOpencodeServer(selectedWorktree.path) : undefined
-  
+
   // Debug logging
   useEffect(() => {
     if (currentServer) {
@@ -199,6 +200,7 @@ export function CenterPanel() {
 
     let unlisten: UnlistenFn | undefined
     let activeMessageIds = new Set<string>()
+    let messageRoles = new Map<string, string>()
     let isBusy = false
 
     const setupListener = async () => {
@@ -271,6 +273,48 @@ export function CenterPanel() {
           return
         }
 
+        if (data?.type === 'message.updated') {
+          const props = data?.properties as Record<string, unknown> | undefined
+          const info = props?.info as Record<string, unknown> | undefined
+          const msgId = info?.id as string | undefined
+          const role = info?.role as string | undefined
+
+          if (msgId && role) {
+            messageRoles.set(msgId, role)
+            if (role === 'assistant') {
+              isBusy = true
+            }
+          }
+          return
+        }
+
+        if (data?.type === 'message.part.delta') {
+          const props = data?.properties as Record<string, unknown> | undefined
+          const partId = props?.partID as string | undefined
+          const messageId = props?.messageID as string | undefined
+          const field = props?.field as string | undefined
+          const delta = props?.delta as string | undefined
+
+          if (partId && field === 'text' && delta && messageId) {
+            const role = messageRoles.get(messageId)
+            if (role === 'assistant') {
+              activeMessageIds.add(partId)
+
+              const streamingMsg: Message = {
+                id: partId,
+                messageId: partId,
+                role: 'assistant',
+                content: '',
+                timestamp: new Date(),
+                isStreaming: true,
+              }
+              upsertStreamingMessage(selectedWorktree.path, streamingMsg)
+              appendStreamingMessageDelta(selectedWorktree.path, partId, delta)
+            }
+          }
+          return
+        }
+
         if (!isBusy) return
 
         if (data?.type !== 'message.part.updated') return
@@ -278,6 +322,10 @@ export function CenterPanel() {
         const part = data?.properties?.part
         const partType = part?.type
         const text = part?.text || ''
+        const partMsgId = part?.messageID as string | undefined
+        const role = partMsgId ? messageRoles.get(partMsgId) : undefined
+
+        if (role !== 'assistant') return
 
         const partId = part?.id || part?.messageID || `msg-${Date.now()}`
 
@@ -366,10 +414,10 @@ export function CenterPanel() {
   useEffect(() => {
     const loadDiff = async () => {
       if (!activeFile || !selectedWorktree || activeView !== 'changes') return
-      
+
       setLoadingDiff(true)
       try {
-        const diff: string = await invoke('get_diff', { 
+        const diff: string = await invoke('get_diff', {
           worktreePath: selectedWorktree.path,
           filePath: activeFile
         })
@@ -392,7 +440,7 @@ export function CenterPanel() {
 
   const handleTabClick = async (tabId: string) => {
     setActiveTab(tabId)
-    
+
     // If opencode tab and server not running, start it
     if (tabId === 'codex' && selectedWorktree) {
       const server = getOpencodeServer(selectedWorktree.path)
@@ -401,7 +449,7 @@ export function CenterPanel() {
         await startOpencodeServer(selectedWorktree.path, worktreeName)
       }
     }
-    
+
     // Check if terminal exists for this agent
     const existingTerminal = terminals.find(t => t.agent_type === tabId)
     if (existingTerminal) {
@@ -435,7 +483,7 @@ export function CenterPanel() {
       console.log('Cannot send message:', { command: !!command.trim(), selectedWorktree: !!selectedWorktree, serverRunning: currentServer?.isRunning })
       return
     }
-    
+
     if (!currentServer.sessionId) {
       console.error('No session ID available')
       const errorMessage: Message = {
@@ -465,11 +513,11 @@ export function CenterPanel() {
       console.log('Sending message to session:', currentServer.sessionId)
       console.log('Server:', currentServer.hostname, currentServer.port)
       console.log('Selected model:', selectedModel)
-      
+
       // Extract provider and model IDs from "providerId/modelId" format
       const [providerId, modelId] = selectedModel ? selectedModel.split('/') : ['', '']
       console.log('Using provider ID:', providerId, 'model ID:', modelId)
-      
+
       // Send message asynchronously and rely on SSE for streaming response
       await invoke('send_opencode_message_async', {
         hostname: currentServer.hostname,
@@ -500,6 +548,8 @@ export function CenterPanel() {
   const handleAnswerQuestion = async (label: string) => {
     if (!pendingQuestion || !selectedWorktree || !currentServer?.isRunning) return
 
+    const [providerId, modelId] = selectedModel ? selectedModel.split('/') : ['', '']
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -509,7 +559,9 @@ export function CenterPanel() {
 
     addAgentMessage(selectedWorktree.path, userMessage)
     setPendingQuestion(null)
+    clearStreamingMessages(selectedWorktree.path)
     setAgentIsSending(selectedWorktree.path, true)
+    setAgentStreamingContent(selectedWorktree.path, '')
 
     try {
       await invoke('send_opencode_message_async', {
@@ -517,6 +569,8 @@ export function CenterPanel() {
         port: currentServer.port,
         sessionId: currentServer.sessionId,
         message: label,
+        providerId: providerId || null,
+        modelId: modelId || null,
       })
     } catch (error) {
       console.error('Failed to answer question:', error)
@@ -557,7 +611,7 @@ export function CenterPanel() {
         {AGENT_TABS.map((tab) => {
           const isActive = activeTab === tab.id
           const hasActiveTerminal = terminals.some(t => t.agent_type === tab.id)
-          
+
           return (
             <button
               key={tab.id}
@@ -575,10 +629,10 @@ export function CenterPanel() {
                   transition={{ type: 'spring', stiffness: 300, damping: 30 }}
                 />
               )}
-              
+
               <span style={{ color: isActive ? tab.color : undefined }}>{tab.icon}</span>
               <span>{tab.name}</span>
-              
+
               {hasActiveTerminal && (
                 <button
                   onClick={(e) => handleCloseTab(e, tab.id)}
@@ -599,8 +653,8 @@ export function CenterPanel() {
             onClick={() => setActiveView('console')}
             className={cn(
               "flex items-center gap-2 px-3 py-1.5 text-sm transition-all rounded-md",
-              activeView === 'console' 
-                ? "bg-[#1a1a1a] text-[#e0e0e0]" 
+              activeView === 'console'
+                ? "bg-[#1a1a1a] text-[#e0e0e0]"
                 : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
             )}
           >
@@ -611,8 +665,8 @@ export function CenterPanel() {
             onClick={() => setActiveView('changes')}
             className={cn(
               "flex items-center gap-2 px-3 py-1.5 text-sm transition-all rounded-md",
-              activeView === 'changes' 
-                ? "bg-[#1a1a1a] text-[#e0e0e0]" 
+              activeView === 'changes'
+                ? "bg-[#1a1a1a] text-[#e0e0e0]"
                 : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
             )}
           >
@@ -765,15 +819,15 @@ export function CenterPanel() {
                 {openFiles.map((file: string) => {
                   const isActive = activeFile === file
                   const fileName = getFileName(file)
-                  
+
                   return (
                     <button
                       key={file}
                       onClick={() => selectedWorktree && setActiveFile(selectedWorktree.path, file)}
                       className={cn(
                         "flex items-center gap-2 px-4 py-2 text-sm border-r border-[#1a1a1a] min-w-fit",
-                        isActive 
-                          ? "bg-[#1a1a1a] text-[#e0e0e0]" 
+                        isActive
+                          ? "bg-[#1a1a1a] text-[#e0e0e0]"
                           : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
                       )}
                     >
@@ -813,7 +867,7 @@ export function CenterPanel() {
                           M
                         </span>
                       </div>
-                      
+
                       <div className="flex items-center gap-3 text-xs">
                         <span className="flex items-center gap-1 text-[#4ade80]">
                           +{addedCount}
@@ -838,7 +892,7 @@ export function CenterPanel() {
                                 {line.newLine || ''}
                               </span>
                             </div>
-                            
+
                             {/* Content */}
                             <div className={`
                               flex-1 py-0.5 pl-3 pr-4 whitespace-pre
