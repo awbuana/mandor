@@ -88,30 +88,18 @@ interface PendingQuestion {
   callID: string
 }
 
-function formatReadGrepInput(tool: string, input: Record<string, unknown> | undefined): string {
-  if (!input) return tool
+function formatReadGrepInput(input: Record<string, unknown> | undefined): string {
+  if (!input) return 'unknown'
 
-  const filePath = input.path as string || input.file as string || ''
+  const filePath = input.path as string || input.file as string || input.filePath as string || ''
   const filename = filePath.split('/').pop() || filePath
   const offset = input.offset as number | undefined
   const limit = input.limit as number | undefined
-  const pattern = input.pattern as string | undefined
 
-  if (tool === 'grep' && pattern) {
-    if (offset !== undefined && limit !== undefined) {
-      return `Grep ${pattern} ${filename} [offset=${offset}, limit=${limit}]`
-    }
-    return `Grep ${pattern} ${filename}`
+  if (offset !== undefined && limit !== undefined) {
+    return `${filename} <${offset}:${limit}>`
   }
-
-  if (tool === 'read' && filePath) {
-    if (offset !== undefined && limit !== undefined) {
-      return `Read ${filename} [offset=${offset}, limit=${limit}]`
-    }
-    return `Read ${filename}`
-  }
-
-  return `${tool} ${filename}`
+  return filename
 }
 
 
@@ -852,64 +840,25 @@ export function CenterPanel() {
                           )}
                         >
                           {message.toolCall ? (
-                            <div className="flex flex-col gap-1">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-xs text-[#d97757] uppercase font-mono">{message.toolCall.tool}</span>
-                                {message.toolCall.tool === 'read' || message.toolCall.tool === 'grep' ? (
-                                  <span className="text-xs text-[#6b6b6b] font-mono">
-                                    {formatReadGrepInput(message.toolCall.tool, message.toolCall.input)}
-                                  </span>
-                                ) : message.toolCall.input && Object.keys(message.toolCall.input).length > 0 ? (
-                                  <pre className="text-xs text-[#6b6b6b] font-mono overflow-x-auto">
-                                    {JSON.stringify(message.toolCall.input, null, 2)}
-                                  </pre>
-                                ) : null}
-                                <span 
-                                  data-tool-status={message.toolCall.status}
-                                  className={cn(
-                                    "text-[10px] px-1.5 py-0.5 rounded ml-auto",
-                                    message.toolCall.status === 'running' ? "bg-[#3a3a2a] text-[#d97757]" :
-                                    message.toolCall.status === 'completed' ? "bg-[#2a3a2a] text-[#57d977]" :
-                                    message.toolCall.status === 'error' ? "bg-[#5a2a2a] text-[#f87171]" :
-                                    "bg-[#2a2a2a] text-[#9b9b9b]"
-                                  )}
-                                >
-                                  {message.toolCall.status}
-                                </span>
-                              </div>
-                              {message.toolCall.tool === 'read' || message.toolCall.tool === 'grep' ? (
-                                <div data-tool-section="input">
-                                  <span className="text-[10px] text-[#5b5b5b] uppercase font-mono">
-                                    {message.toolCall.tool === 'read' ? 'Reading:' : 'Searching:'}
-                                  </span>
-                                  <pre className="text-xs text-[#6b6b6b] font-mono overflow-x-auto mt-1">
-                                    {formatReadGrepInput(message.toolCall.tool, message.toolCall.input)}
-                                  </pre>
-                                </div>
-                              ) : message.toolCall.input && Object.keys(message.toolCall.input).length > 0 ? (
-                                <div data-tool-section="input">
-                                  <span className="text-[10px] text-[#5b5b5b] uppercase font-mono">Input:</span>
-                                  <pre className="text-xs text-[#6b6b6b] font-mono overflow-x-auto mt-1">
-                                    {JSON.stringify(message.toolCall.input, null, 2)}
-                                  </pre>
-                                </div>
-                              ) : null}
-                              {message.toolCall.status === 'completed' && message.toolCall.output && message.toolCall.tool !== 'read' && message.toolCall.tool !== 'grep' && (
-                                <div data-tool-section="output">
-                                  <span className="text-[10px] text-[#5b5b5b] uppercase font-mono">Output:</span>
-                                  <pre className="text-xs text-[#6b6b6b] font-mono overflow-x-auto mt-1">
-                                    {message.toolCall.output}
-                                  </pre>
-                                </div>
-                              )}
-                                {message.toolCall.status === 'error' && (
-                                  <div data-tool-section="error">
-                                    <span className="text-[10px] text-[#f87171] uppercase font-mono">Error:</span>
-                                    <pre className="text-xs text-[#f87171] font-mono overflow-x-auto mt-1">
-                                      {message.toolCall.output || 'Tool execution failed'}
-                                    </pre>
-                                  </div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs text-[#d97757] uppercase font-mono">{message.toolCall.tool}</span>
+                              <span className="text-xs text-[#6b6b6b] font-mono">
+                                {message.toolCall.tool === 'read' || message.toolCall.tool === 'grep'
+                                  ? formatReadGrepInput(message.toolCall.input)
+                                  : JSON.stringify(message.toolCall.input || {})}
+                              </span>
+                              <span 
+                                data-tool-status={message.toolCall.status}
+                                className={cn(
+                                  "text-[10px] px-1.5 py-0.5 rounded ml-auto",
+                                  message.toolCall.status === 'running' ? "bg-[#3a3a2a] text-[#d97757]" :
+                                  message.toolCall.status === 'completed' ? "bg-[#2a3a2a] text-[#57d977]" :
+                                  message.toolCall.status === 'error' ? "bg-[#5a2a2a] text-[#f87171]" :
+                                  "bg-[#2a2a2a] text-[#9b9b9b]"
                                 )}
+                              >
+                                {message.toolCall.status}
+                              </span>
                             </div>
                           ) : message.content ? (
                             <p className="whitespace-pre-wrap break-words text-sm text-[#e0e0e0]">{message.content}</p>
