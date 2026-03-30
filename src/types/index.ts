@@ -22,6 +22,15 @@ export interface WorktreeStatus {
   untracked: string[];
 }
 
+export interface GitCommit {
+  hash: string;
+  short_hash: string;
+  message: string;
+  author: string;
+  date: string;
+  is_head: boolean;
+}
+
 export interface TerminalSession {
   id: string;
   worktree_path: string;
@@ -37,8 +46,21 @@ export interface FileDiff {
   content: string;
 }
 
+/** Represents a comment attached to a specific file or line during code review */
+export interface FileComment {
+  id: string;
+  filePath: string;
+  lineNumber?: number;
+  author: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+  parentId?: string;
+  resolved: boolean;
+}
+
 export type AgentType = 'opencode' | 'claude' | 'cursor' | 'bash';
 
+/** Configuration for an external code editor that can be launched from the app */
 export interface EditorType {
   id: string;
   name: string;
