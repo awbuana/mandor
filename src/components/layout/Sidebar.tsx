@@ -1,10 +1,8 @@
 import { useAppStore } from '@/stores/appStore'
 import { Worktree } from '@/types'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
-  GitBranch,
   Plus,
-  Globe,
   Trash
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
@@ -26,25 +24,25 @@ function PortsPanel() {
   const runningServers = Object.values(opencodeServers).filter(s => s.isRunning && s.port)
 
   return (
-    <div className="border-t border-[#1a1a1a]">
-      <div className="px-4 py-2 flex items-center justify-between">
+    <div className="border-t border-[#1a1a1a] font-mono">
+      <div className="px-3 py-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Globe className="w-4 h-4 text-[#6b6b6b]" />
-          <span className="text-xs font-medium text-[#6b6b6b] uppercase tracking-wider">Ports</span>
+          <span className="text-[#6b6b6b]">[-]</span>
+          <span className="text-xs text-[#6b6b6b] uppercase tracking-wider">PORTS</span>
         </div>
         <span className="text-xs text-[#5b5b5b]">{runningServers.length}</span>
       </div>
 
       <div className="px-2 pb-2">
         {runningServers.length > 0 ? (
-          <div className="space-y-1">
+          <div className="space-y-0">
             {runningServers.map((server) => (
               <div
                 key={server.worktreePath}
-                className="flex items-center gap-2 px-3 py-1.5 rounded hover:bg-[#111111]"
+                className="flex items-center gap-2 px-3 py-1.5 hover:bg-[#111111]"
               >
-                <span className="w-2 h-2 rounded-full bg-[#4ade80]" />
-                <span className="text-xs font-mono text-[#9b9b9b]">
+                <span className="w-2 h-2 bg-[#4ade80]" />
+                <span className="text-xs text-[#9b9b9b]">
                   {server.hostname}:{server.port}
                 </span>
                 <span className="text-xs text-[#6b6b6b] truncate flex-1">
@@ -54,8 +52,8 @@ function PortsPanel() {
             ))}
           </div>
         ) : (
-          <div className="px-3 py-2 text-xs text-[#5b5b5b] text-center">
-            No forwarded ports
+          <div className="px-3 py-2 text-xs text-[#5b5b5b]">
+            // no forwarded ports
           </div>
         )}
       </div>
@@ -125,12 +123,23 @@ export function Sidebar() {
   }
 
   const handleDeleteWorktree = async () => {
-    if (!worktreeToDelete || !currentRepoPath) return
+    console.log('Delete clicked', { worktreeToDelete, currentRepoPath })
+    if (!worktreeToDelete) {
+      console.log('Early return - no worktree to delete')
+      return
+    }
+    
+    // Find the main repo path from worktrees
+    const mainWorktree = worktrees.find(w => w.is_main)
+    const repoPath = currentRepoPath || (mainWorktree ? mainWorktree.path : worktreeToDelete.path)
+    
+    console.log('Using repoPath:', repoPath)
     
     setIsDeleting(true)
     try {
+      console.log('Calling delete_worktree', { repoPath, worktreePath: worktreeToDelete.path })
       await invoke('delete_worktree', {
-        repoPath: currentRepoPath,
+        repoPath: repoPath,
         worktreePath: worktreeToDelete.path
       })
       
@@ -159,32 +168,37 @@ export function Sidebar() {
         className="w-72 h-full bg-[#0a0a0a] border-r border-[#1a1a1a] flex flex-col"
       >
         {/* Repository Header */}
-        <div className="px-4 py-3 flex items-center justify-between">
+        <div className="px-3 py-2 flex items-center justify-between font-mono border-b border-[#1a1a1a]">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-[#9b9b9b]">{repoName}</span>
-            <span className="text-xs text-[#6b6b6b]">({worktrees.length})</span>
+            <span className="text-xs text-[#6b6b6b]">[-]</span>
+            <span className="text-xs text-[#6b6b6b] uppercase tracking-wider">WORKTREES</span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[#5b5b5b]">{worktrees.length}</span>
             <button 
               onClick={handleCreateWorktreeClick}
-              className="p-1 hover:bg-[#1a1a1a] rounded text-[#6b6b6b] hover:text-[#9b9b9b] transition-colors"
+              className="p-1 hover:bg-[#1a1a1a] text-[#6b6b6b] hover:text-[#9b9b9b] transition-colors"
               title={currentRepoPath ? "Create new worktree" : "Open repository first"}
             >
-              <Plus className="w-4 h-4" />
-            </button>
-            <button className="p-1 hover:bg-[#1a1a1a] rounded text-[#6b6b6b] hover:text-[#9b9b9b] transition-colors">
-              <GitBranch className="w-4 h-4" />
+              <Plus className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
 
+        {/* Repository Info */}
+        <div className="px-3 py-2 font-mono">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-[#4ade80]">➜</span>
+            <span className="text-[#9b9b9b]">{repoName}</span>
+          </div>
+        </div>
+
       {/* Branch List */}
-      <div className="flex-1 overflow-auto px-2">
-        <div className="space-y-0.5">
+      <div className="flex-1 overflow-auto px-2 font-mono">
+        <div className="space-y-0">
           {worktrees.length === 0 ? (
-            <div className="px-4 py-8 text-center text-[#6b6b6b]">
-              <p className="text-sm">No worktrees found</p>
-              <p className="text-xs mt-1">Open a repository to get started</p>
+            <div className="px-3 py-4 text-xs text-[#5b5b5b]">
+              // no worktrees found
             </div>
           ) : (
             worktrees.map((worktree, index) => {
@@ -201,80 +215,78 @@ export function Sidebar() {
                 >
                   <div
                     className={cn(
-                      "group relative px-3 py-2 rounded-md cursor-pointer transition-all",
+                      "group relative flex items-start justify-between px-3 py-2 transition-all",
                       isSelected
                         ? "bg-[#1a1a1a]"
                         : "hover:bg-[#111111]"
                     )}
                   >
+                    {/* Clickable content area */}
                     <div
                       onClick={() => setSelectedWorktree(worktree)}
-                      className="flex items-start justify-between"
+                      className="flex-1 min-w-0 cursor-pointer"
                     >
-                      <div className="flex-1 min-w-0">
-                        {/* Branch Name */}
-                        <div className="flex items-center gap-2">
-                          <span className={cn(
-                            "text-sm font-medium truncate",
-                            isSelected ? "text-[#e0e0e0]" : "text-[#9b9b9b]"
-                          )}>
-                            {branchName}
-                          </span>
-                          {worktree.is_main && (
-                            <span className="text-[10px] px-1.5 py-0.5 bg-[#1a1a1a] text-[#6b6b6b] rounded">
-                              main
-                            </span>
-                          )}
-                        </div>
-                        
-                        {/* Commit Hash */}
-                        <div className="mt-0.5">
-                          <span className="text-xs text-[#5b5b5b] font-mono">
-                            {worktree.head.slice(0, 7)}
-                          </span>
-                        </div>
-                        
-                        {/* Worktree Path */}
-                        <div className="mt-1" title={worktree.path}>
-                          <span className="text-[10px] text-[#4a4a4a] font-mono block overflow-hidden text-ellipsis whitespace-nowrap max-w-[200px]">
-                            {worktree.path.replace(/^\/Users\/[^/]+/, '~')}
-                          </span>
-                        </div>
-                      </div>
-
+                      {/* Branch Name with indicator */}
                       <div className="flex items-center gap-2">
-                        {/* Change Stats */}
-                        {(changes.added > 0 || changes.removed > 0) && (
-                          <div className="flex items-center gap-1 text-xs">
-                            {changes.added > 0 && (
-                              <span className="text-[#4ade80]">+{changes.added}</span>
-                            )}
-                            {changes.removed > 0 && (
-                              <span className="text-[#f87171]">-{changes.removed}</span>
-                            )}
-                          </div>
+                        {isSelected && (
+                          <span className="text-[#d97757]">▸</span>
                         )}
-                        
-                        {/* Delete Button - Only show on hover and for non-main worktrees */}
-                        {!worktree.is_main && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setWorktreeToDelete(worktree)
-                            }}
-                            className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-[#f87171]/20 rounded text-[#6b6b6b] hover:text-[#f87171] transition-all"
-                            title="Delete worktree"
-                          >
-                            <Trash className="w-4 h-4" />
-                          </button>
+                        <span className={cn(
+                          "text-sm truncate",
+                          isSelected ? "text-[#e0e0e0]" : "text-[#9b9b9b]"
+                        )}>
+                          {branchName}
+                        </span>
+                        {worktree.is_main && (
+                          <span className="text-[10px] px-1 py-0.5 bg-[#1a1a1a] text-[#6b6b6b]">
+                            main
+                          </span>
                         )}
+                      </div>
+                      
+                      {/* Commit Hash */}
+                      <div className="mt-0.5">
+                        <span className="text-xs text-[#5b5b5b]">
+                          {worktree.head.slice(0, 7)}
+                        </span>
+                      </div>
+                      
+                      {/* Worktree Path */}
+                      <div className="mt-1" title={worktree.path}>
+                        <span className="text-[10px] text-[#4a4a4a] block overflow-hidden text-ellipsis whitespace-nowrap max-w-[200px]">
+                          {worktree.path.replace(/^\/Users\/[^/]+/, '~')}
+                        </span>
                       </div>
                     </div>
 
-                    {/* Selected Indicator */}
-                    {isSelected && (
-                      <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-6 bg-[#d97757] rounded-r" />
-                    )}
+                    {/* Action buttons - separate from clickable area */}
+                    <div className="flex items-center gap-2 ml-2">
+                      {/* Change Stats */}
+                      {(changes.added > 0 || changes.removed > 0) && (
+                        <div className="flex items-center gap-1 text-xs">
+                          {changes.added > 0 && (
+                            <span className="text-[#4ade80]">+{changes.added}</span>
+                          )}
+                          {changes.removed > 0 && (
+                            <span className="text-[#f87171]">-{changes.removed}</span>
+                          )}
+                        </div>
+                      )}
+                      
+                      {/* Delete Button - Only show on hover and for non-main worktrees */}
+                      {!worktree.is_main && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setWorktreeToDelete(worktree)
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#f87171]/20 text-[#6b6b6b] hover:text-[#f87171] transition-all"
+                          title="Delete worktree"
+                        >
+                          <Trash className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </motion.div>
               )
@@ -294,46 +306,105 @@ export function Sidebar() {
       />
 
       {/* Delete Confirmation Modal */}
-      {worktreeToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div 
-            className="absolute inset-0 bg-black/60"
-            onClick={() => setWorktreeToDelete(null)}
-          />
-          <div className="relative w-80 bg-[#0a0a0a] border border-[#1a1a1a] rounded-lg shadow-2xl p-4">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 bg-[#f87171]/10 rounded-lg flex items-center justify-center">
-                <Trash className="w-5 h-5 text-[#f87171]" />
-              </div>
-              <div>
-                <h3 className="text-sm font-medium text-[#e0e0e0]">Delete Worktree</h3>
-                <p className="text-xs text-[#6b6b6b]">{getBranchName(worktreeToDelete)}</p>
-              </div>
-            </div>
-            
-            <p className="text-sm text-[#9b9b9b] mb-4">
-              Are you sure you want to delete this worktree? This action cannot be undone.
-            </p>
-            
-            <div className="flex gap-2">
-              <button
-                onClick={() => setWorktreeToDelete(null)}
-                disabled={isDeleting}
-                className="flex-1 px-4 py-2 bg-transparent hover:bg-[#1a1a1a] border border-[#1a1a1a] text-[#9b9b9b] rounded-md text-sm font-medium transition-colors"
+      <AnimatePresence>
+        {worktreeToDelete && (
+          <>
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/80 z-50"
+              onClick={() => setWorktreeToDelete(null)}
+            />
+
+            {/* Modal */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }}
+              transition={{ duration: 0.1 }}
+              className="fixed inset-0 flex items-center justify-center z-50"
+            >
+              <div 
+                className="w-96 bg-[#0a0a0a] border border-[#1a1a1a] shadow-2xl font-mono"
+                onClick={(e) => e.stopPropagation()}
               >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteWorktree}
-                disabled={isDeleting}
-                className="flex-1 px-4 py-2 bg-[#f87171] hover:bg-[#ef4444] disabled:opacity-50 text-white rounded-md text-sm font-medium transition-colors"
-              >
-                {isDeleting ? 'Deleting...' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+                {/* Terminal Header */}
+                <div className="flex items-center justify-between px-3 py-2 bg-[#111111] border-b border-[#1a1a1a]">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[#f87171]">⚠</span>
+                    <span className="text-xs text-[#6b6b6b] uppercase tracking-wider">confirm_delete</span>
+                  </div>
+                  <button
+                    onClick={() => setWorktreeToDelete(null)}
+                    className="text-[#6b6b6b] hover:text-[#9b9b9b] text-xs"
+                  >
+                    [x]
+                  </button>
+                </div>
+
+                {/* Terminal Content */}
+                <div className="p-4 space-y-4">
+                  {/* Command Line Style Info */}
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-[#4ade80]">➜</span>
+                      <span className="text-[#6b6b6b]">~</span>
+                      <span className="text-[#9b9b9b]">rm -rf</span>
+                      <span className="text-[#f87171]">{getBranchName(worktreeToDelete)}</span>
+                    </div>
+                  </div>
+
+                  {/* Warning Message */}
+                  <div className="border-l-2 border-[#f87171] pl-3 py-1">
+                    <p className="text-sm text-[#9b9b9b]">
+                      Warning: This action will permanently delete the worktree.
+                    </p>
+                    <p className="text-xs text-[#6b6b6b] mt-1">
+                      Path: {worktreeToDelete.path.replace(/^\/Users\/[^/]+/, '~')}
+                    </p>
+                  </div>
+
+                  {/* Terminal Actions */}
+                  <div className="flex items-center gap-3 pt-2">
+                    <span className="text-xs text-[#6b6b6b]">Proceed? [Y/n]</span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setWorktreeToDelete(null)}
+                        disabled={isDeleting}
+                        className="px-3 py-1.5 bg-[#111111] hover:bg-[#1a1a1a] border border-[#1a1a1a] text-[#9b9b9b] text-xs transition-colors disabled:opacity-50"
+                      >
+                        n (Cancel)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          console.log('Delete button clicked - executing')
+                          handleDeleteWorktree()
+                        }}
+                        disabled={isDeleting}
+                        className="px-3 py-1.5 bg-[#f87171]/10 hover:bg-[#f87171]/20 border border-[#f87171]/30 text-[#f87171] text-xs transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        {isDeleting ? 'Y (Deleting...)' : 'Y (Delete)'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Terminal Footer */}
+                <div className="px-3 py-2 bg-[#111111] border-t border-[#1a1a1a] flex items-center justify-between">
+                  <span className="text-[10px] text-[#4a4a4a]">mandor-workbench</span>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 bg-[#f87171]" />
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </>
   )
 }
