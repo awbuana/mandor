@@ -512,16 +512,16 @@ export function ReviewPanel() {
             )}
           </div>
           {stagedCount > 0 && (
-            <button
+            <span
               onClick={(e) => {
                 e.stopPropagation()
                 handleUnstageAll()
               }}
-              className="text-[9px] text-[#6b6b6b] hover:text-[#9b9b9b] font-mono transition-colors"
+              className="text-[9px] text-[#6b6b6b] hover:text-[#9b9b9b] font-mono transition-colors cursor-pointer"
               title="Unstage all"
             >
               [−ALL]
-            </button>
+            </span>
           )}
         </button>
 
@@ -568,16 +568,16 @@ export function ReviewPanel() {
             )}
           </div>
           {changesCount > 0 && (
-            <button
+            <span
               onClick={(e) => {
                 e.stopPropagation()
                 handleStageAll()
               }}
-              className="text-[9px] text-[#6b6b6b] hover:text-[#9b9b9b] font-mono transition-colors"
+              className="text-[9px] text-[#6b6b6b] hover:text-[#9b9b9b] font-mono transition-colors cursor-pointer"
               title="Stage all"
             >
               [+ALL]
-            </button>
+            </span>
           )}
         </button>
 

@@ -123,12 +123,23 @@ export function Sidebar() {
   }
 
   const handleDeleteWorktree = async () => {
-    if (!worktreeToDelete || !currentRepoPath) return
+    console.log('Delete clicked', { worktreeToDelete, currentRepoPath })
+    if (!worktreeToDelete) {
+      console.log('Early return - no worktree to delete')
+      return
+    }
+    
+    // Find the main repo path from worktrees
+    const mainWorktree = worktrees.find(w => w.is_main)
+    const repoPath = currentRepoPath || (mainWorktree ? mainWorktree.path : worktreeToDelete.path)
+    
+    console.log('Using repoPath:', repoPath)
     
     setIsDeleting(true)
     try {
+      console.log('Calling delete_worktree', { repoPath, worktreePath: worktreeToDelete.path })
       await invoke('delete_worktree', {
-        repoPath: currentRepoPath,
+        repoPath: repoPath,
         worktreePath: worktreeToDelete.path
       })
       
@@ -313,10 +324,12 @@ export function Sidebar() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 10 }}
               transition={{ duration: 0.1 }}
-              className="fixed inset-0 flex items-center justify-center z-50 pointer-events-none"
-              onClick={(e) => e.stopPropagation()}
+              className="fixed inset-0 flex items-center justify-center z-50"
             >
-              <div className="w-96 bg-[#0a0a0a] border border-[#1a1a1a] shadow-2xl pointer-events-auto font-mono">
+              <div 
+                className="w-96 bg-[#0a0a0a] border border-[#1a1a1a] shadow-2xl font-mono"
+                onClick={(e) => e.stopPropagation()}
+              >
                 {/* Terminal Header */}
                 <div className="flex items-center justify-between px-3 py-2 bg-[#111111] border-b border-[#1a1a1a]">
                   <div className="flex items-center gap-2">
@@ -358,6 +371,7 @@ export function Sidebar() {
                     <span className="text-xs text-[#6b6b6b]">Proceed? [Y/n]</span>
                     <div className="flex gap-2">
                       <button
+                        type="button"
                         onClick={() => setWorktreeToDelete(null)}
                         disabled={isDeleting}
                         className="px-3 py-1.5 bg-[#111111] hover:bg-[#1a1a1a] border border-[#1a1a1a] text-[#9b9b9b] text-xs transition-colors disabled:opacity-50"
@@ -365,9 +379,13 @@ export function Sidebar() {
                         n (Cancel)
                       </button>
                       <button
-                        onClick={handleDeleteWorktree}
+                        type="button"
+                        onClick={() => {
+                          console.log('Delete button clicked - executing')
+                          handleDeleteWorktree()
+                        }}
                         disabled={isDeleting}
-                        className="px-3 py-1.5 bg-[#f87171]/10 hover:bg-[#f87171]/20 border border-[#f87171]/30 text-[#f87171] text-xs transition-colors disabled:opacity-50"
+                        className="px-3 py-1.5 bg-[#f87171]/10 hover:bg-[#f87171]/20 border border-[#f87171]/30 text-[#f87171] text-xs transition-colors disabled:opacity-50 cursor-pointer"
                       >
                         {isDeleting ? 'Y (Deleting...)' : 'Y (Delete)'}
                       </button>
