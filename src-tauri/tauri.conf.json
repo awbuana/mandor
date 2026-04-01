@@ -35,5 +35,10 @@
     "macOS": {
       "signingIdentity": "-"
     }
+  },
+  "plugins": {
+    "updater": {
+      "active": false
+    }
   }
 }
