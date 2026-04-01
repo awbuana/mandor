@@ -9,7 +9,7 @@ import {
   Plus,
   X
 } from '@phosphor-icons/react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/invokeLogger';
 import { useState, useEffect } from 'react';
 
 export function WorktreeList() {

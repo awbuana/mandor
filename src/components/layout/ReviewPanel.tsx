@@ -4,7 +4,7 @@ import {
   GitCommit as GitCommitIcon
 } from '@phosphor-icons/react'
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from '@/lib/invokeLogger'
 import { FileStatus, FileComment, GitCommit as GitCommitType } from '@/types'
 import { cn } from '@/lib/utils'
 

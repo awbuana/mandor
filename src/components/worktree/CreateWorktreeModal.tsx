@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAppStore } from '@/stores/appStore'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from '@/lib/invokeLogger'
 
 interface CreateWorktreeModalProps {
   isOpen: boolean

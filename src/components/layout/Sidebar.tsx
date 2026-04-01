@@ -7,7 +7,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useState } from 'react'
 import { CreateWorktreeModal } from '@/components/worktree/CreateWorktreeModal'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from '@/lib/invokeLogger'
 
 
 export function Sidebar() {

@@ -10,7 +10,7 @@ import { InlineDiffViewer } from '@/components/diff/InlineDiffViewer'
 import { TerminalView } from '@/components/terminal/TerminalInstance'
 import { TuiView } from '@/components/terminal/TUIInstance'
 import { useState, useEffect, useRef } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from '@/lib/invokeLogger'
 
 interface DiffLine {
   type: 'header' | 'add' | 'remove' | 'context'

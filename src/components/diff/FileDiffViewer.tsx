@@ -1,6 +1,6 @@
 import { useAppStore } from '@/stores/appStore'
 import { useState, useEffect } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from '@/lib/invokeLogger'
 import { Plus, Minus, X } from '@phosphor-icons/react'
 import { motion, AnimatePresence } from 'framer-motion'
 

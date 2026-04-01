@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { spawn } from 'tauri-pty'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from '@/lib/invokeLogger'
 import { useAppStore } from '@/stores/appStore'
 import '@xterm/xterm/css/xterm.css'
 

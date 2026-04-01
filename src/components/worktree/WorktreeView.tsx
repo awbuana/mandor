@@ -15,7 +15,7 @@ import {
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/invokeLogger';
 
 interface WorktreeViewProps {
   worktree: Worktree;

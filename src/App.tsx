@@ -5,7 +5,7 @@ import { Sidebar } from './components/layout/Sidebar'
 import { CenterPanel } from './components/layout/CenterPanel'
 import { ReviewPanel } from './components/layout/ReviewPanel'
 import { useAppStore } from './stores/appStore'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from '@/lib/invokeLogger'
 import { WorktreeStatus, DiffStats } from './types'
 
 function App() {
