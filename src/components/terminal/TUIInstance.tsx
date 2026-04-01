@@ -133,6 +133,9 @@ export function TuiView({ worktreePath, port, isVisible }: TuiViewProps) {
       fitAddonRef.current = null
       ptyRef.current = null
       openedRef.current = false
+      invoke('stop_opencode_server', { worktreePath }).catch((err) => {
+        console.log('Failed to stop opencode server:', err)
+      })
     }
   }, [worktreePath, port])
 

@@ -33,6 +33,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_pty::init())
         .manage(watcher::WatcherState::new())
+        .manage(opencode::OpencodeState::new())
         .invoke_handler(tauri::generate_handler![
             open_app_window,
             git::list_worktrees,
@@ -58,6 +59,7 @@ fn main() {
             watcher::add_watch_path,
             watcher::remove_watch_path,
             opencode::start_opencode_server,
+            opencode::stop_opencode_server,
             opencode::tui_append_prompt,
             opencode::tui_submit_prompt,
         ])

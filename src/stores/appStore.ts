@@ -49,6 +49,10 @@ interface AppState {
   terminalPanelHeight: number;
   showTerminalPanel: boolean;
 
+  // TUI State (per worktree)
+  startedTuiWorktrees: string[];
+  tuiPorts: Record<string, number>;
+
   // Actions
   setCurrentRepoPath: (path: string | null) => void;
   setWorktrees: (worktrees: Worktree[]) => void;
@@ -85,6 +89,12 @@ interface AppState {
   toggleSidebar: () => void;
   setTerminalPanelHeight: (height: number) => void;
   toggleTerminalPanel: () => void;
+
+  // TUI actions
+  startTui: (worktreePath: string, port: number) => void;
+  stopTui: (worktreePath: string) => void;
+  isTuiStarted: (worktreePath: string) => boolean;
+  getTuiPort: (worktreePath: string) => number | undefined;
 }
 
 const createDefaultSession = (): WorktreeSession => ({
@@ -112,6 +122,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   sidebarCollapsed: false,
   terminalPanelHeight: 300,
   showTerminalPanel: true,
+  startedTuiWorktrees: [],
+  tuiPorts: {},
 
   setCurrentRepoPath: (path) => set({ currentRepoPath: path }),
   setWorktrees: (worktrees) => set({ worktrees }),
@@ -321,4 +333,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   setTerminalPanelHeight: (height) => set({ terminalPanelHeight: height }),
   toggleTerminalPanel: () => set((state) => ({ showTerminalPanel: !state.showTerminalPanel })),
+
+  // TUI actions
+  startTui: (worktreePath, port) => set((state) => ({
+    startedTuiWorktrees: state.startedTuiWorktrees.includes(worktreePath)
+      ? state.startedTuiWorktrees
+      : [...state.startedTuiWorktrees, worktreePath],
+    tuiPorts: { ...state.tuiPorts, [worktreePath]: port },
+  })),
+  stopTui: (worktreePath) => set((state) => ({
+    startedTuiWorktrees: state.startedTuiWorktrees.filter(p => p !== worktreePath),
+    tuiPorts: Object.fromEntries(
+      Object.entries(state.tuiPorts).filter(([key, _]) => key !== worktreePath)
+    ),
+  })),
+  isTuiStarted: (worktreePath) => get().startedTuiWorktrees.includes(worktreePath),
+  getTuiPort: (worktreePath) => get().tuiPorts[worktreePath],
 }));

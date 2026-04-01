@@ -467,6 +467,129 @@ src-tauri/
 - Frontend uses ref-based cancellation to ignore stale results
 - Single effect loads both status and git log to avoid duplicate calls
 
+## Backend Idempotency Patterns
+
+**IMPORTANT**: All Rust backend commands must handle concurrent and duplicate invocations safely.
+
+### Why Idempotency Matters
+
+1. **React StrictMode** double-invokes effects in development (mount → unmount → remount)
+2. **Frontend bugs** may cause duplicate command invocations
+3. **Network issues** may cause retries that result in duplicate calls
+
+Without idempotency, duplicate calls lead to:
+- Duplicate PTY processes spawned
+- Multiple polling loops wasting resources
+- Conflicting state modifications
+
+### Global Lock Pattern
+
+For commands that perform initialization (like `start_opencode_server`), use a **global lock** to serialize concurrent calls:
+
+```rust
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub struct OpencodeState {
+    cache: Arc<Mutex<HashMap<String, OpencodeServerInfo>>>,
+    global_lock: Arc<Mutex<()>>,  // Single lock for all init operations
+}
+
+impl OpencodeState {
+    pub fn new() -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(HashMap::new())),
+            global_lock: Arc::new(Mutex::new(())),
+        }
+    }
+}
+```
+
+### Command Implementation Pattern
+
+```rust
+#[tauri::command]
+pub async fn start_opencode_server(
+    state: tauri::State<'_, OpencodeState>,
+    worktree_path: String,
+    port: u16,
+    hostname: String,
+) -> Result<OpencodeServerInfo, String> {
+    // 1. Acquire global lock - second caller blocks here
+    let _guard = state.global_lock.lock().await;
+
+    // 2. Check cache (double-check pattern after acquiring lock)
+    {
+        let cache = state.cache.lock().await;
+        if let Some(cached) = cache.get(&worktree_path) {
+            return Ok(cached.clone());  // Return cached result immediately
+        }
+    }
+
+    // 3. Perform initialization (health polling, session creation, etc.)
+    // ...
+
+    // 4. Store result in cache
+    {
+        let mut cache = state.cache.lock().await;
+        cache.insert(worktree_path.clone(), result.clone());
+    }
+
+    Ok(result)
+}
+```
+
+### Execution Flow
+
+```
+Call A                          Call B
+────────                        ────────
+acquires global lock
+checks cache → miss
+performs init (1/30)...        (blocked on global lock)
+performs init (2/30)...
+...
+performs init (30/30)
+stores in cache
+releases lock ────────────────→→
+                               acquires global lock
+                               checks cache → HIT!
+                               returns cached result immediately
+```
+
+### Key Principles
+
+| Principle | Implementation |
+|-----------|----------------|
+| **Lock before cache check** | Prevents race condition where both callers see cache miss |
+| **Cache results** | Subsequent callers return immediately without re-initialization |
+| **Release lock after cache store** | Ensures next waiter finds populated cache |
+| **Use global lock** | Simpler than per-resource locks; works for initialization commands |
+
+### When to Use Idempotency
+
+Apply this pattern to commands that:
+- Perform expensive initialization (polling, process spawning)
+- Create resources that should only exist once (sessions, connections)
+- Modify shared state that could conflict with duplicate calls
+
+### Cleanup Pattern
+
+When a resource is stopped/destroyed, clear the cache:
+
+```rust
+#[tauri::command]
+pub async fn stop_opencode_server(
+    state: tauri::State<'_, OpencodeState>,
+    worktree_path: String,
+) -> Result<(), String> {
+    let _guard = state.global_lock.lock().await;  // Serialize with init
+    let mut cache = state.cache.lock().await;
+    cache.remove(&worktree_path);
+    Ok(())
+}
+```
+
 ## Available Scripts
 
 ```bash

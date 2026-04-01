@@ -9,7 +9,7 @@ import { FileComment } from '@/types'
 import { InlineDiffViewer } from '@/components/diff/InlineDiffViewer'
 import { TerminalView } from '@/components/terminal/TerminalInstance'
 import { TuiView } from '@/components/terminal/TUIInstance'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { invoke } from '@/lib/invokeLogger'
 
 interface DiffLine {
@@ -32,15 +32,14 @@ export function CenterPanel() {
     removeComment,
     resolveComment,
     getFileComments,
+    startedTuiWorktrees,
+    tuiPorts,
+    startTui,
   } = useAppStore()
 
   const [diffContent, setDiffContent] = useState<DiffLine[]>([])
   const [loadingDiff, setLoadingDiff] = useState(false)
   const [diffZoom, setDiffZoom] = useState<number>(50)
-
-  // Track which worktree paths have had their TUI started (keyed by path)
-  const startedTuisRef = useRef<Set<string>>(new Set())
-  const [startedTuis, setStartedTuis] = useState<Set<string>>(new Set())
 
   // Port = 9900 + 0-based index of the worktree in the list
   const worktreeIndex = selectedWorktree
@@ -184,19 +183,20 @@ export function CenterPanel() {
           </div>
         )}
 
-        {/* TUI View — mounted only after user clicks Start; stays mounted (CSS hide/show) so session persists */}
-        {selectedWorktree && startedTuis.has(selectedWorktree.path) && (
+        {/* TUI Views — always mounted for all started worktrees so PTY sessions persist across worktree switches */}
+        {startedTuiWorktrees.map((wtPath) => (
           <div
+            key={wtPath}
             className="absolute inset-0"
-            style={{ display: activeView === 'tui' ? 'block' : 'none' }}
+            style={{ display: activeView === 'tui' && selectedWorktree?.path === wtPath ? 'block' : 'none' }}
           >
             <TuiView
-              worktreePath={selectedWorktree.path}
-              port={opencodePort}
-              isVisible={activeView === 'tui'}
+              worktreePath={wtPath}
+              port={tuiPorts[wtPath] || opencodePort}
+              isVisible={activeView === 'tui' && selectedWorktree?.path === wtPath}
             />
           </div>
-        )}
+        ))}
 
         {/* TUI empty states and Start button */}
         {activeView === 'tui' && !selectedWorktree ? (
@@ -204,7 +204,7 @@ export function CenterPanel() {
             <MonitorPlay className="w-12 h-12 mb-3 opacity-50" />
             <p className="text-sm">Select a worktree to open the TUI</p>
           </div>
-        ) : activeView === 'tui' && selectedWorktree && !startedTuis.has(selectedWorktree.path) ? (
+        ) : activeView === 'tui' && selectedWorktree && !startedTuiWorktrees.includes(selectedWorktree.path) ? (
           <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b] gap-4">
             <MonitorPlay className="w-12 h-12 opacity-30" />
             <div className="text-center">
@@ -215,9 +215,7 @@ export function CenterPanel() {
             </div>
             <button
               onClick={() => {
-                const path = selectedWorktree.path
-                startedTuisRef.current.add(path)
-                setStartedTuis(new Set(startedTuisRef.current))
+                startTui(selectedWorktree.path, opencodePort)
               }}
               className="flex items-center gap-1.5 px-4 py-2 bg-[#111111] hover:bg-[#1a1a1a] border border-[#2a2a2a] hover:border-[#d97757]/50 text-[10px] text-[#e0e0e0] transition-all font-mono group"
             >
