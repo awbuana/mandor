@@ -5,10 +5,16 @@ mod opencode;
 mod watcher;
 mod worktree;
 
+use log::info;
 use tauri::Manager;
+
+macro_rules! log_main {
+    ($($arg:tt)*) => (info!(target: "mandor::main", $($arg)*))
+}
 
 #[tauri::command]
 async fn open_app_window(app: tauri::AppHandle) {
+    log_main!("open_app_window called");
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();

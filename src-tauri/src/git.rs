@@ -1,6 +1,11 @@
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
+
+macro_rules! log_git {
+    ($($arg:tt)*) => (info!(target: "mandor::git", $($arg)*))
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Worktree {
@@ -42,6 +47,7 @@ pub struct GitCommit {
 
 #[tauri::command]
 pub fn list_worktrees(repo_path: String) -> Result<Vec<Worktree>, String> {
+    log_git!("list_worktrees called with repo_path: {}", repo_path);
     let output = Command::new("git")
         .args(&["-C", &repo_path, "worktree", "list", "--porcelain"])
         .output()
@@ -97,6 +103,7 @@ pub fn create_worktree(
     branch: String,
     path: String,
 ) -> Result<Worktree, String> {
+    log_git!("create_worktree called with repo_path: {}, branch: {}, path: {}", repo_path, branch, path);
     let worktree_path = PathBuf::from(&repo_path).join(&path);
 
     // Check if branch exists
@@ -148,6 +155,7 @@ pub fn create_worktree(
 
 #[tauri::command]
 pub fn delete_worktree(repo_path: String, worktree_path: String) -> Result<(), String> {
+    log_git!("delete_worktree called with repo_path: {}, worktree_path: {}", repo_path, worktree_path);
     let output = Command::new("git")
         .args(&["-C", &repo_path, "worktree", "remove", "-f", &worktree_path])
         .output()
@@ -255,6 +263,7 @@ pub fn compute_worktree_status(worktree_path: &str) -> Result<WorktreeStatus, St
 
 #[tauri::command]
 pub async fn get_worktree_status(worktree_path: String) -> Result<WorktreeStatus, String> {
+    log_git!("get_worktree_status called with worktree_path: {}", worktree_path);
     let path = worktree_path.clone();
     tokio::task::spawn_blocking(move || {
         compute_worktree_status(&path)
@@ -265,6 +274,7 @@ pub async fn get_worktree_status(worktree_path: String) -> Result<WorktreeStatus
 
 #[tauri::command]
 pub fn git_push(worktree_path: String) -> Result<(), String> {
+    log_git!("git_push called with worktree_path: {}", worktree_path);
     let output = Command::new("git")
         .args(&["-C", &worktree_path, "push"])
         .output()
@@ -279,6 +289,7 @@ pub fn git_push(worktree_path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_diff(worktree_path: String, file_path: Option<String>) -> Result<String, String> {
+    log_git!("get_diff called with worktree_path: {}, file_path: {:?}", worktree_path, file_path);
     // First try regular diff for tracked/modified files
     let diff_output = if let Some(ref file) = file_path {
         Command::new("git")
@@ -440,6 +451,7 @@ pub fn compute_diff_stats(worktree_path: &str) -> Result<DiffStats, String> {
 
 #[tauri::command]
 pub async fn get_diff_stats(worktree_path: String) -> Result<DiffStats, String> {
+    log_git!("get_diff_stats called with worktree_path: {}", worktree_path);
     let path = worktree_path.clone();
     tokio::task::spawn_blocking(move || {
         compute_diff_stats(&path)
@@ -450,6 +462,7 @@ pub async fn get_diff_stats(worktree_path: String) -> Result<DiffStats, String> 
 
 #[tauri::command]
 pub fn stage_file(worktree_path: String, file_path: String) -> Result<(), String> {
+    log_git!("stage_file called with worktree_path: {}, file_path: {}", worktree_path, file_path);
     let output = Command::new("git")
         .args(&["-C", &worktree_path, "add", &file_path])
         .output()
@@ -464,6 +477,7 @@ pub fn stage_file(worktree_path: String, file_path: String) -> Result<(), String
 
 #[tauri::command]
 pub fn stage_all_files(worktree_path: String) -> Result<(), String> {
+    log_git!("stage_all_files called with worktree_path: {}", worktree_path);
     let output = Command::new("git")
         .args(&["-C", &worktree_path, "add", "-A"])
         .output()
@@ -478,6 +492,7 @@ pub fn stage_all_files(worktree_path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn unstage_all_files(worktree_path: String) -> Result<(), String> {
+    log_git!("unstage_all_files called with worktree_path: {}", worktree_path);
     let output = Command::new("git")
         .args(&["-C", &worktree_path, "reset"])
         .output()
@@ -492,6 +507,7 @@ pub fn unstage_all_files(worktree_path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn unstage_file(worktree_path: String, file_path: String) -> Result<(), String> {
+    log_git!("unstage_file called with worktree_path: {}, file_path: {}", worktree_path, file_path);
     let output = Command::new("git")
         .args(&["-C", &worktree_path, "reset", "HEAD", &file_path])
         .output()
@@ -506,6 +522,7 @@ pub fn unstage_file(worktree_path: String, file_path: String) -> Result<(), Stri
 
 #[tauri::command]
 pub fn discard_changes(worktree_path: String, file_path: String) -> Result<(), String> {
+    log_git!("discard_changes called with worktree_path: {}, file_path: {}", worktree_path, file_path);
     let output = Command::new("git")
         .args(&["-C", &worktree_path, "checkout", "--", &file_path])
         .output()
@@ -520,6 +537,7 @@ pub fn discard_changes(worktree_path: String, file_path: String) -> Result<(), S
 
 #[tauri::command]
 pub fn commit(worktree_path: String, message: String) -> Result<String, String> {
+    log_git!("commit called with worktree_path: {}, message: {}", worktree_path, message);
     let output = Command::new("git")
         .args(&["-C", &worktree_path, "commit", "-m", &message])
         .output()
@@ -538,6 +556,7 @@ pub fn commit(worktree_path: String, message: String) -> Result<String, String> 
 
 #[tauri::command]
 pub fn get_branches(repo_path: String) -> Result<Vec<String>, String> {
+    log_git!("get_branches called with repo_path: {}", repo_path);
     let output = Command::new("git")
         .args(&["-C", &repo_path, "branch", "-a", "--format=%(refname:short)"])
         .output()
@@ -558,6 +577,7 @@ pub fn get_branches(repo_path: String) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub async fn get_git_log(worktree_path: String, limit: Option<i32>) -> Result<Vec<GitCommit>, String> {
+    log_git!("get_git_log called with worktree_path: {}, limit: {:?}", worktree_path, limit);
     let path = worktree_path.clone();
     let lim = limit.unwrap_or(50);
     
@@ -602,6 +622,7 @@ pub async fn get_git_log(worktree_path: String, limit: Option<i32>) -> Result<Ve
 
 #[tauri::command]
 pub async fn open_repository(app: tauri::AppHandle) -> Result<String, String> {
+    log_git!("open_repository called");
     use tauri_plugin_dialog::DialogExt;
 
     let folder_path = app

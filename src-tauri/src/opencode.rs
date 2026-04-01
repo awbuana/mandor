@@ -8,6 +8,7 @@
 //!
 //! The opencode process is expected to be spawned by the frontend via a PTY component.
 //! This module provides HTTP-based communication to control the running instance.
+use log::{info, debug};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -15,6 +16,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
+
+macro_rules! log_opencode {
+    ($($arg:tt)*) => (info!(target: "mandor::opencode", $($arg)*))
+}
+macro_rules! log_opencode_debug {
+    ($($arg:tt)*) => (debug!(target: "mandor::opencode", $($arg)*))
+}
 
 // ── Response shapes ──────────────────────────────────────────────────────────
 //
@@ -85,21 +93,21 @@ pub async fn start_opencode_server(
     port: u16,
     hostname: String,
 ) -> Result<OpencodeServerInfo, String> {
-    eprintln!("[opencode] start_opencode_server called for {} port {}", worktree_path, port);
+    log_opencode!("start_opencode_server called with worktree_path: {}, port: {}, hostname: {}", worktree_path, port, hostname);
     let _guard = state.global_lock.lock().await;
-    eprintln!("[opencode] global lock acquired for {}", worktree_path);
+    log_opencode_debug!("global lock acquired for {}", worktree_path);
 
     let cache = state.cache.lock().await;
     if let Some(cached) = cache.get(&worktree_path) {
-        eprintln!(
-            "[opencode] returning cached server info for {} (port {})",
+        log_opencode_debug!(
+            "returning cached server info for {} (port {})",
             worktree_path, cached.port
         );
         return Ok(cached.clone());
     }
     drop(cache);
 
-    eprintln!("[opencode] cache miss for {}, starting to poll", worktree_path);
+    log_opencode_debug!("cache miss for {}, starting to poll", worktree_path);
 
     let client = Client::builder()
         .timeout(Duration::from_secs(5))
@@ -125,8 +133,8 @@ pub async fn start_opencode_server(
             }
             _ => {}
         }
-        eprintln!(
-            "[opencode] waiting for server on port {} (attempt {}/30)…",
+        log_opencode_debug!(
+            "waiting for server on port {} (attempt {}/30)…",
             port, attempt
         );
         sleep(Duration::from_millis(500)).await;
@@ -156,7 +164,7 @@ pub async fn start_opencode_server(
 
     let mut cache = state.cache.lock().await;
     cache.insert(worktree_path.clone(), result.clone());
-    eprintln!("[opencode] cached result for {}, releasing lock", worktree_path);
+    log_opencode_debug!("cached result for {}, releasing lock", worktree_path);
 
     Ok(result)
 }
@@ -170,8 +178,8 @@ pub async fn stop_opencode_server(
     let _guard = state.global_lock.lock().await;
     let mut cache = state.cache.lock().await;
     if let Some(removed) = cache.remove(&worktree_path) {
-        eprintln!(
-            "[opencode] cleared cached server for {} (port {})",
+        log_opencode!(
+            "cleared cached server for {} (port {})",
             worktree_path, removed.port
         );
     }
@@ -186,6 +194,7 @@ pub async fn tui_append_prompt(
     port: u16,
     text: String,
 ) -> Result<bool, String> {
+    log_opencode!("tui_append_prompt called with hostname: {}, port: {}, text length: {}", hostname, port, text.len());
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -205,6 +214,7 @@ pub async fn tui_append_prompt(
 /// POST /tui/submit-prompt  (no body)
 #[tauri::command]
 pub async fn tui_submit_prompt(hostname: String, port: u16) -> Result<bool, String> {
+    log_opencode!("tui_submit_prompt called with hostname: {}, port: {}", hostname, port);
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
         .build()

@@ -1,6 +1,11 @@
+use log::info;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
+
+macro_rules! log_watcher {
+    ($($arg:tt)*) => (info!(target: "mandor::watcher", $($arg)*))
+}
 
 use notify::RecommendedWatcher;
 use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
@@ -154,6 +159,7 @@ pub fn start_file_watcher(
     state: State<WatcherState>,
     paths: Vec<String>,
 ) -> Result<(), String> {
+    log_watcher!("start_file_watcher called with paths: {:?}", paths);
     use notify::RecursiveMode;
 
     let mut debouncer = build_debouncer(app, paths.clone())?;
@@ -174,6 +180,7 @@ pub fn start_file_watcher(
 /// Stop the file watcher and release all OS resources.
 #[tauri::command]
 pub fn stop_file_watcher(state: State<WatcherState>) -> Result<(), String> {
+    log_watcher!("stop_file_watcher called");
     *state.debouncer.lock().unwrap() = None;
     state.watched_paths.lock().unwrap().clear();
     Ok(())
@@ -188,6 +195,7 @@ pub fn add_watch_path(
     state: State<WatcherState>,
     path: String,
 ) -> Result<(), String> {
+    log_watcher!("add_watch_path called with path: {}", path);
     use notify::RecursiveMode;
 
     let mut paths = state.watched_paths.lock().unwrap();
@@ -221,6 +229,7 @@ pub fn remove_watch_path(
     state: State<WatcherState>,
     path: String,
 ) -> Result<(), String> {
+    log_watcher!("remove_watch_path called with path: {}", path);
     use notify::RecursiveMode;
 
     let mut paths = state.watched_paths.lock().unwrap();

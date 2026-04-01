@@ -1,5 +1,10 @@
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+
+macro_rules! log_worktree {
+    ($($arg:tt)*) => (info!(target: "mandor::worktree", $($arg)*))
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WorktreeInfo {
@@ -12,6 +17,11 @@ pub struct WorktreeInfo {
 
 #[tauri::command]
 pub fn open_in_editor(editor: String, path: String) -> Result<(), String> {
+    log_worktree!(
+        "open_in_editor called with editor: {}, path: {}",
+        editor,
+        path
+    );
     let cmd = match editor.as_str() {
         "vscode" => "code",
         "cursor" => "cursor",
@@ -35,19 +45,24 @@ pub fn open_in_editor(editor: String, path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_worktree_info(path: String) -> Result<WorktreeInfo, String> {
+    log_worktree!("get_worktree_info called with path: {}", path);
     let branch_output = Command::new("git")
         .args(&["-C", &path, "rev-parse", "--abbrev-ref", "HEAD"])
         .output()
         .map_err(|e| format!("Failed to get branch: {}", e))?;
 
-    let branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+    let branch = String::from_utf8_lossy(&branch_output.stdout)
+        .trim()
+        .to_string();
 
     let commit_output = Command::new("git")
         .args(&["-C", &path, "rev-parse", "--short", "HEAD"])
         .output()
         .map_err(|e| format!("Failed to get commit: {}", e))?;
 
-    let commit = String::from_utf8_lossy(&commit_output.stdout).trim().to_string();
+    let commit = String::from_utf8_lossy(&commit_output.stdout)
+        .trim()
+        .to_string();
 
     Ok(WorktreeInfo {
         path,
