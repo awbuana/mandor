@@ -5,10 +5,12 @@ import {
   Command,
   Robot,
   Play,
-  FileCode
+  FileCode,
+  Terminal as TerminalIcon
 } from '@phosphor-icons/react'
 import { AgentType, FileComment } from '@/types'
 import { InlineDiffViewer } from '@/components/diff/InlineDiffViewer'
+import { TerminalInstance } from '@/components/terminal/TerminalInstance'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useSSE } from '@/hooks/useSSE'
@@ -601,12 +603,12 @@ export function CenterPanel() {
               <span className="uppercase tracking-wide">{tab.name}</span>
 
               {hasActiveTerminal && (
-                <button
+                <span
                   onClick={(e) => handleCloseTab(e, tab.id)}
-                  className="ml-1 text-[10px] text-[#6b6b6b] hover:text-[#e0e0e0] font-mono"
+                  className="ml-1 text-[10px] text-[#6b6b6b] hover:text-[#e0e0e0] font-mono cursor-pointer"
                 >
                   [x]
-                </button>
+                </span>
               )}
             </button>
           )
@@ -639,6 +641,18 @@ export function CenterPanel() {
           >
             <span className="text-[#9b9b9b]">[&lt;&gt;]</span>
             <span className="uppercase">Changes</span>
+          </button>
+          <button
+            onClick={() => setActiveView('tui')}
+            className={cn(
+              "flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] transition-all",
+              activeView === 'tui'
+                ? "bg-[#1a1a1a] text-[#e0e0e0]"
+                : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
+            )}
+          >
+            <span className="text-[#9b9b9b]">[$]</span>
+            <span className="uppercase">TUI</span>
           </button>
         </div>
       </div>
@@ -768,145 +782,164 @@ export function CenterPanel() {
               </div>
             </div>
           )
-        ) : (
-          // Changes View
-          !selectedWorktree ? (
-            <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
-              <FileCode className="w-12 h-12 mb-3 opacity-50" />
-              <p className="text-sm">Select a worktree to view changes</p>
-            </div>
-          ) : openFiles.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
-              <FileCode className="w-12 h-12 mb-3 opacity-50" />
-              <p className="text-sm">Select a file from Review Changes to view diff</p>
-            </div>
-          ) : (
-            <div className="h-full flex flex-col">
-              {/* File Tabs */}
-              <div className="flex items-center border-b border-[#1a1a1a] overflow-x-auto font-mono">
-                {openFiles.map((file: string) => {
-                  const isActive = activeFile === file
-                  const fileName = getFileName(file)
-
-                  return (
-                    <div
-                      key={file}
-                      onClick={() => selectedWorktree && setActiveFile(selectedWorktree.path, file)}
-                      className={cn(
-                        "flex items-center gap-1.5 px-3 py-1.5 text-[10px] border-r border-[#1a1a1a] min-w-fit cursor-pointer",
-                        isActive
-                          ? "bg-[#1a1a1a] text-[#e0e0e0]"
-                          : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
-                      )}
-                    >
-                      <span className="truncate max-w-[150px]">{fileName}</span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          selectedWorktree && closeFile(selectedWorktree.path, file)
-                        }}
-                        className="text-[9px] text-[#6b6b6b] hover:text-[#e0e0e0] font-mono"
-                      >
-                        [x]
-                      </button>
-                    </div>
-                  )
-                })}
+          ) : activeView === 'changes' ? (
+            // Changes View
+            !selectedWorktree ? (
+              <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
+                <FileCode className="w-12 h-12 mb-3 opacity-50" />
+                <p className="text-sm">Select a worktree to view changes</p>
               </div>
+            ) : openFiles.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
+                <FileCode className="w-12 h-12 mb-3 opacity-50" />
+                <p className="text-sm">Select a file from Review Changes to view diff</p>
+              </div>
+            ) : (
+              <div className="h-full flex flex-col">
+                {/* File Tabs */}
+                <div className="flex items-center border-b border-[#1a1a1a] overflow-x-auto font-mono">
+                  {openFiles.map((file: string) => {
+                    const isActive = activeFile === file
+                    const fileName = getFileName(file)
 
-              {/* File Content */}
-              {activeFile ? (
-                loadingDiff ? (
-                  <div className="flex-1 flex items-center justify-center text-[#6b6b6b]">
-                    <div className="animate-spin w-6 h-6 border-2 border-[#2a2a2a] border-t-[#d97757] rounded-full" />
-                  </div>
-                ) : (
-                  <>
-                    {/* File Header */}
-                    <div className="px-3 py-2 border-b border-[#1a1a1a] flex items-center justify-between bg-[#0f0f0f] font-mono">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[9px] px-1.5 py-0.5 bg-[#1a1a1a] text-[#6b6b6b]">
-                          {getFileExtension(activeFile)}
-                        </span>
-                        <span className="text-[11px] text-[#e0e0e0]">
-                          {activeFile}
-                        </span>
-                        <span className="text-[9px] text-[#d97757]">
-                          [M]
-                        </span>
+                    return (
+                      <div
+                        key={file}
+                        onClick={() => selectedWorktree && setActiveFile(selectedWorktree.path, file)}
+                        className={cn(
+                          "flex items-center gap-1.5 px-3 py-1.5 text-[10px] border-r border-[#1a1a1a] min-w-fit cursor-pointer",
+                          isActive
+                            ? "bg-[#1a1a1a] text-[#e0e0e0]"
+                            : "text-[#6b6b6b] hover:text-[#9b9b9b] hover:bg-[#111111]"
+                        )}
+                      >
+                        <span className="truncate max-w-[150px]">{fileName}</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            selectedWorktree && closeFile(selectedWorktree.path, file)
+                          }}
+                          className="text-[9px] text-[#6b6b6b] hover:text-[#e0e0e0] font-mono"
+                        >
+                          [x]
+                        </button>
                       </div>
-
-                      <div className="flex items-center gap-3">
-                        {/* Zoom Controls */}
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => setDiffZoom(z => Math.max(50, z - 10))}
-                            className="px-1.5 py-0.5 text-[10px] bg-[#1a1a1a] hover:bg-[#2a2a2a] text-[#9b9b9b] transition-colors font-mono"
-                            title="Zoom out"
-                          >
-                            [−]
-                          </button>
-                          <span className="text-[10px] text-[#6b6b6b] w-8 text-center">{diffZoom}%</span>
-                          <button
-                            onClick={() => setDiffZoom(z => Math.min(200, z + 10))}
-                            className="px-1.5 py-0.5 text-[10px] bg-[#1a1a1a] hover:bg-[#2a2a2a] text-[#9b9b9b] transition-colors font-mono"
-                            title="Zoom in"
-                          >
-                            [+]
-                          </button>
-                        </div>
-
-                        <div className="flex items-center gap-2 text-[10px] font-mono">
-                          <span className="text-[#4ade80]">
-                            +{addedCount}
-                          </span>
-                          <span className="text-[#f87171]">
-                            −{removedCount}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Diff Content with Inline Comments - Single scroll container */}
-                    <div className="flex-1 bg-[#0a0a0a] overflow-hidden">
-                      {selectedWorktree && activeFile && (
-                        <InlineDiffViewer
-                          diffContent={diffContent}
-                          filePath={activeFile}
-                          zoom={diffZoom}
-                          comments={getFileComments(selectedWorktree.path, activeFile)}
-                          onAddComment={(lineNumber: number, content: string) => {
-                            const newComment: FileComment = {
-                              id: `comment-${Date.now()}`,
-                              filePath: activeFile,
-                              lineNumber,
-                              author: 'user',
-                              content,
-                              timestamp: new Date(),
-                              resolved: false,
-                            }
-                            addComment(selectedWorktree.path, newComment)
-                          }}
-                          onResolveComment={(commentId: string) => {
-                            resolveComment(selectedWorktree.path, activeFile, commentId)
-                          }}
-                          onDeleteComment={(commentId: string) => {
-                            removeComment(selectedWorktree.path, activeFile, commentId)
-                          }}
-                        />
-                      )}
-                    </div>
-                  </>
-                )
-              ) : (
-                <div className="flex-1 flex items-center justify-center text-[#5b5b5b]">
-                  <p className="text-sm">Select a file tab to view</p>
+                    )
+                  })}
                 </div>
-              )}
-            </div>
-          )
-        )}
-      </div>
+
+                {/* File Content */}
+                {activeFile ? (
+                  loadingDiff ? (
+                    <div className="flex-1 flex items-center justify-center text-[#6b6b6b]">
+                      <div className="animate-spin w-6 h-6 border-2 border-[#2a2a2a] border-t-[#d97757] rounded-full" />
+                    </div>
+                  ) : (
+                    <>
+                      {/* File Header */}
+                      <div className="px-3 py-2 border-b border-[#1a1a1a] flex items-center justify-between bg-[#0f0f0f] font-mono">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] px-1.5 py-0.5 bg-[#1a1a1a] text-[#6b6b6b]">
+                            {getFileExtension(activeFile)}
+                          </span>
+                          <span className="text-[11px] text-[#e0e0e0]">
+                            {activeFile}
+                          </span>
+                          <span className="text-[9px] text-[#d97757]">
+                            [M]
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          {/* Zoom Controls */}
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => setDiffZoom(z => Math.max(50, z - 10))}
+                              className="px-1.5 py-0.5 text-[10px] bg-[#1a1a1a] hover:bg-[#2a2a2a] text-[#9b9b9b] transition-colors font-mono"
+                              title="Zoom out"
+                            >
+                              [−]
+                            </button>
+                            <span className="text-[10px] text-[#6b6b6b] w-8 text-center">{diffZoom}%</span>
+                            <button
+                              onClick={() => setDiffZoom(z => Math.min(200, z + 10))}
+                              className="px-1.5 py-0.5 text-[10px] bg-[#1a1a1a] hover:bg-[#2a2a2a] text-[#9b9b9b] transition-colors font-mono"
+                              title="Zoom in"
+                            >
+                              [+]
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-2 text-[10px] font-mono">
+                            <span className="text-[#4ade80]">
+                              +{addedCount}
+                            </span>
+                            <span className="text-[#f87171]">
+                              −{removedCount}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Diff Content with Inline Comments - Single scroll container */}
+                      <div className="flex-1 bg-[#0a0a0a] overflow-hidden">
+                        {selectedWorktree && activeFile && (
+                          <InlineDiffViewer
+                            diffContent={diffContent}
+                            filePath={activeFile}
+                            zoom={diffZoom}
+                            comments={getFileComments(selectedWorktree.path, activeFile)}
+                            onAddComment={(lineNumber: number, content: string) => {
+                              const newComment: FileComment = {
+                                id: `comment-${Date.now()}`,
+                                filePath: activeFile,
+                                lineNumber,
+                                author: 'user',
+                                content,
+                                timestamp: new Date(),
+                                resolved: false,
+                              }
+                              addComment(selectedWorktree.path, newComment)
+                            }}
+                            onResolveComment={(commentId: string) => {
+                              resolveComment(selectedWorktree.path, activeFile, commentId)
+                            }}
+                            onDeleteComment={(commentId: string) => {
+                              removeComment(selectedWorktree.path, activeFile, commentId)
+                            }}
+                          />
+                        )}
+                      </div>
+                    </>
+                  )
+                ) : (
+                  <div className="flex-1 flex items-center justify-center text-[#5b5b5b]">
+                    <p className="text-sm">Select a file tab to view</p>
+                  </div>
+                )}
+              </div>
+            )
+          ) : (
+            // TUI View
+            !selectedWorktree ? (
+              <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
+                <TerminalIcon className="w-12 h-12 mb-3 opacity-50" />
+                <p className="text-sm">Select a worktree to open terminal</p>
+              </div>
+            ) : terminals.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-[#5b5b5b]">
+                <TerminalIcon className="w-12 h-12 mb-3 opacity-50" />
+                <p className="text-sm">Click the opencode tab above to spawn a terminal</p>
+              </div>
+            ) : (
+              <div className="h-full flex flex-col">
+                {terminals.filter(t => t.agent_type === 'opencode').map((terminal) => (
+                  <TerminalInstance key={terminal.id} terminal={terminal} />
+                ))}
+              </div>
+            )
+          )}
+        </div>
 
       {/* Bottom Panel - Command Input */}
       {activeView === 'console' && selectedWorktree && currentServer?.isRunning && (

@@ -6,6 +6,7 @@ mod terminal;
 mod opencode;
 
 use tauri::Manager;
+use terminal::TerminalManager;
 
 #[tauri::command]
 async fn open_app_window(app: tauri::AppHandle) {
@@ -31,6 +32,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
+        .manage(TerminalManager::new())
         .invoke_handler(tauri::generate_handler![
             open_app_window,
             git::list_worktrees,

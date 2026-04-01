@@ -74,7 +74,7 @@ interface AppState {
   activeTerminalId: string | null;
 
   // View State
-  activeView: 'console' | 'changes';
+  activeView: 'console' | 'changes' | 'tui';
 
   // Worktree Sessions (scoped state for CenterPanel - files, agent messages, etc.)
   worktreeSessions: Record<string, WorktreeSession>;
@@ -98,7 +98,7 @@ interface AppState {
   removeTerminal: (id: string) => void;
   setActiveTerminal: (id: string | null) => void;
 
-  setActiveView: (view: 'console' | 'changes') => void;
+  setActiveView: (view: 'console' | 'changes' | 'tui') => void;
 
   // Worktree Session Actions
   getWorktreeSession: (worktreePath: string) => WorktreeSession;
