@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod git;
+mod git_state;
 mod opencode;
 mod watcher;
 mod worktree;
@@ -39,6 +40,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_pty::init())
         .manage(watcher::WatcherState::new())
+        .manage(git_state::GitState::new())
         .manage(opencode::OpencodeState::new())
         .invoke_handler(tauri::generate_handler![
             open_app_window,

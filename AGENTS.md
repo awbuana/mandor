@@ -590,6 +590,91 @@ pub async fn stop_opencode_server(
 }
 ```
 
+### Per-Worktree Lock Pattern
+
+For git operations that could conflict when run concurrently on the same worktree, use **per-worktree locks** to serialize operations while allowing parallelism across different worktrees:
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub struct GitState {
+    locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+}
+
+impl GitState {
+    pub fn new() -> Self {
+        Self {
+            locks: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub async fn get_lock(&self, worktree_path: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.locks.lock().await;
+        locks.entry(worktree_path.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+}
+```
+
+### Git Command Implementation Pattern
+
+Git commands that modify worktree state should acquire a per-worktree lock and run blocking operations off the main thread:
+
+```rust
+#[tauri::command]
+pub async fn commit(
+    state: State<'_, GitState>,
+    worktree_path: String,
+    message: String,
+) -> Result<String, String> {
+    // 1. Acquire per-worktree lock
+    let lock: Arc<Mutex<()>> = state.get_lock(&worktree_path).await;
+    let _guard = lock.lock().await;
+
+    // 2. Run blocking git operation off main thread
+    let path = worktree_path.clone();
+    let msg = message.clone();
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .args(&["-C", &path, "commit", "-m", &msg])
+            .output()
+            .map_err(|e| format!("Failed to commit: {}", e))?;
+
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+```
+
+### Why Per-Worktree Locks?
+
+| Scenario | Without Locks | With Per-Worktree Locks |
+|----------|--------------|------------------------|
+| Rapid worktree switching | Cascading git operations freeze UI | Operations serialized per-worktree |
+| Duplicate invocations (React StrictMode) | Race conditions, corrupted state | Second call blocks until first completes |
+| Concurrent operations on different worktrees | Full serialization | Parallel execution |
+
+### Protected Git Commands
+
+The following git commands use per-worktree locks and `spawn_blocking`:
+
+- `get_worktree_status` - Read worktree state
+- `get_diff` - Read diff output  
+- `get_diff_stats` - Read diff statistics
+- `get_git_log` - Read git history
+- `stage_file` / `stage_all_files` - Modify staging area
+- `unstage_file` / `unstage_all_files` - Modify staging area
+- `discard_changes` - Discard local changes
+- `commit` - Create commit
+- `git_push` - Push to remote
+
 ## Available Scripts
 
 ```bash
