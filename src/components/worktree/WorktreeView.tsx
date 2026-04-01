@@ -1,8 +1,8 @@
 import { Worktree, FileStatus } from '@/types';
 import { useAppStore } from '@/stores/appStore';
 import { motion } from 'framer-motion';
-import { 
-  GitCommit, 
+import {
+  GitCommit,
   FolderOpen,
   FileCode,
   Plus,
@@ -15,7 +15,7 @@ import {
 } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/invokeLogger';
 
 interface WorktreeViewProps {
   worktree: Worktree;
@@ -32,8 +32,8 @@ export function WorktreeView({ worktree }: WorktreeViewProps) {
 
   const loadStatus = async () => {
     try {
-      const status = await invoke('get_worktree_status', { 
-        worktreePath: worktree.path 
+      const status = await invoke('get_worktree_status', {
+        worktreePath: worktree.path
       });
       setWorktreeStatus(worktree.path, status as any);
     } catch (error) {
@@ -48,9 +48,9 @@ export function WorktreeView({ worktree }: WorktreeViewProps) {
 
   const handleStage = async (file: FileStatus) => {
     try {
-      await invoke('stage_file', { 
+      await invoke('stage_file', {
         worktreePath: worktree.path,
-        filePath: file.path 
+        filePath: file.path
       });
       loadStatus();
     } catch (error) {
@@ -60,9 +60,9 @@ export function WorktreeView({ worktree }: WorktreeViewProps) {
 
   const handleUnstage = async (file: FileStatus) => {
     try {
-      await invoke('unstage_file', { 
+      await invoke('unstage_file', {
         worktreePath: worktree.path,
-        filePath: file.path 
+        filePath: file.path
       });
       loadStatus();
     } catch (error) {
@@ -73,9 +73,9 @@ export function WorktreeView({ worktree }: WorktreeViewProps) {
   const handleDiscard = async (file: FileStatus) => {
     if (!confirm(`Discard changes in ${file.path}?`)) return;
     try {
-      await invoke('discard_changes', { 
+      await invoke('discard_changes', {
         worktreePath: worktree.path,
-        filePath: file.path 
+        filePath: file.path
       });
       loadStatus();
     } catch (error) {
@@ -89,9 +89,9 @@ export function WorktreeView({ worktree }: WorktreeViewProps) {
     if (!commitMessage.trim()) return;
     setCommitError(null);
     try {
-      await invoke('commit', { 
+      await invoke('commit', {
         worktreePath: worktree.path,
-        message: commitMessage 
+        message: commitMessage
       });
       setCommitMessage('');
       loadStatus();
@@ -142,21 +142,21 @@ export function WorktreeView({ worktree }: WorktreeViewProps) {
 
       {/* Status Overview */}
       <div className="grid grid-cols-3 gap-4">
-        <StatusCard 
-          title="Modified" 
-          count={status?.modified.length || 0} 
+        <StatusCard
+          title="Modified"
+          count={status?.modified.length || 0}
           icon={FileCode}
           color="text-yellow-400"
         />
-        <StatusCard 
-          title="Staged" 
-          count={status?.staged.length || 0} 
+        <StatusCard
+          title="Staged"
+          count={status?.staged.length || 0}
           icon={Check}
           color="text-emerald-400"
         />
-        <StatusCard 
-          title="Untracked" 
-          count={status?.untracked.length || 0} 
+        <StatusCard
+          title="Untracked"
+          count={status?.untracked.length || 0}
           icon={Plus}
           color="text-blue-400"
         />
@@ -169,34 +169,34 @@ export function WorktreeView({ worktree }: WorktreeViewProps) {
             <h3 className="font-medium text-slate-200">Changes</h3>
             <span className="text-xs text-slate-500">{getTotalChanges()} files changed</span>
           </div>
-          
+
           <div className="divide-y divide-slate-800">
             {/* Staged Files */}
             {status.staged.map((file) => (
-              <FileChangeRow 
-                key={file.path} 
-                file={file} 
+              <FileChangeRow
+                key={file.path}
+                file={file}
                 onUnstage={() => handleUnstage(file)}
                 onDiscard={() => handleDiscard(file)}
                 isStaged
               />
             ))}
-            
+
             {/* Modified Files */}
             {status.modified.map((file) => (
-              <FileChangeRow 
-                key={file.path} 
-                file={file} 
+              <FileChangeRow
+                key={file.path}
+                file={file}
                 onStage={() => handleStage(file)}
                 onDiscard={() => handleDiscard(file)}
               />
             ))}
-            
+
             {/* Untracked Files */}
             {status.untracked.map((path) => (
-              <FileChangeRow 
-                key={path} 
-                file={{ path, status: '?', staged: false }} 
+              <FileChangeRow
+                key={path}
+                file={{ path, status: '?', staged: false }}
                 onStage={() => handleStage({ path, status: '?', staged: false })}
                 isNew
               />
@@ -234,9 +234,9 @@ export function WorktreeView({ worktree }: WorktreeViewProps) {
   );
 }
 
-function StatusCard({ title, count, icon: Icon, color }: { 
-  title: string; 
-  count: number; 
+function StatusCard({ title, count, icon: Icon, color }: {
+  title: string;
+  count: number;
   icon: any;
   color: string;
 }) {
@@ -275,18 +275,18 @@ function FileChangeRow({ file, onStage, onUnstage, onDiscard, isStaged, isNew }:
   };
 
   return (
-    <div 
+    <div
       className="flex items-center gap-3 px-4 py-2 hover:bg-slate-800/50 transition-colors"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
       {getStatusIcon()}
       <span className="flex-1 text-sm text-slate-300 font-mono truncate">{file.path}</span>
-      
+
       {isHovered && (
         <div className="flex items-center gap-1">
           {onStage && (
-            <button 
+            <button
               onClick={onStage}
               className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-emerald-400"
               title="Stage"
@@ -295,7 +295,7 @@ function FileChangeRow({ file, onStage, onUnstage, onDiscard, isStaged, isNew }:
             </button>
           )}
           {onUnstage && (
-            <button 
+            <button
               onClick={onUnstage}
               className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-yellow-400"
               title="Unstage"
@@ -304,7 +304,7 @@ function FileChangeRow({ file, onStage, onUnstage, onDiscard, isStaged, isNew }:
             </button>
           )}
           {onDiscard && (
-            <button 
+            <button
               onClick={onDiscard}
               className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-red-400"
               title="Discard"
@@ -314,7 +314,7 @@ function FileChangeRow({ file, onStage, onUnstage, onDiscard, isStaged, isNew }:
           )}
         </div>
       )}
-      
+
       {isStaged && (
         <span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded">
           staged

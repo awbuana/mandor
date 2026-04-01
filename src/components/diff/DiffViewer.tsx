@@ -1,6 +1,6 @@
 import { useAppStore } from '@/stores/appStore';
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/invokeLogger';
 import { FileCode, Plus, Minus, GitCommit } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 
@@ -32,13 +32,13 @@ export function DiffViewer() {
   const loadDiff = async (filePath: string) => {
     if (!selectedWorktree) return;
     setLoading(true);
-    
+
     try {
-      const diff: string = await invoke('get_diff', { 
+      const diff: string = await invoke('get_diff', {
         worktreePath: selectedWorktree.path,
-        filePath 
+        filePath
       });
-      
+
       const lines = parseDiff(diff);
       setDiffContent(lines);
     } catch (error) {
@@ -157,7 +157,7 @@ export function DiffViewer() {
                       {line.newLine || ''}
                     </span>
                   </div>
-                  
+
                   {/* Content */}
                   <span className={cn(
                     "flex-1 whitespace-pre",

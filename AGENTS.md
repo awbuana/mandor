@@ -415,6 +415,266 @@ src-tauri/
 - **Terminal**: XTerm.js
 - **Diff**: Custom diff viewer implementation
 
+## Troubleshooting
+
+### RemoteLayerTreeDrawingAreaProxyMac Error on macOS
+
+**Symptom**: Console shows `RemoteLayerTreeDrawingAreaProxyMac::scheduleDisplayLink(): page has no displayID` and UI may hang during worktree switching.
+
+**Root Cause**: This WebKit/macOS error occurs when synchronous blocking operations (like git commands) run on the Tauri main thread, blocking the UI event loop.
+
+**Fix**: All git operations that could block the UI must be async:
+
+1. **Rust backend**: Use `spawn_blocking` for git operations:
+   ```rust
+   #[tauri::command]
+   pub async fn get_worktree_status(worktree_path: String) -> Result<WorktreeStatus, String> {
+       let path = worktree_path.clone();
+       tokio::task::spawn_blocking(move || {
+           compute_worktree_status(&path)
+       })
+       .await
+       .map_err(|e| format!("Task join error: {}", e))?
+   }
+   ```
+
+2. **Frontend**: Cancel stale requests when switching worktrees:
+   ```typescript
+   const worktreePathRef = useRef<string | null>(null)
+   
+   useEffect(() => {
+       const currentPath = selectedWorktree?.path || null
+       worktreePathRef.current = currentPath
+       
+       const loadData = async () => {
+           const status = await invoke('get_worktree_status', { worktreePath: currentPath })
+           // Ignore if worktree changed while waiting
+           if (worktreePathRef.current !== currentPath) return
+           setWorktreeStatus(currentPath!, status as any)
+       }
+       loadData()
+       
+       return () => { worktreePathRef.current = null }
+   }, [selectedWorktree?.path])
+   ```
+
+### Worktree Switching Performance
+
+**Issue**: Rapid worktree switching causes cascading git operations that stack up and freeze the UI.
+
+**Fix**: 
+- All git commands are async with `spawn_blocking` in Rust
+- Frontend uses ref-based cancellation to ignore stale results
+- Single effect loads both status and git log to avoid duplicate calls
+
+## Backend Idempotency Patterns
+
+**IMPORTANT**: All Rust backend commands must handle concurrent and duplicate invocations safely.
+
+### Why Idempotency Matters
+
+1. **React StrictMode** double-invokes effects in development (mount → unmount → remount)
+2. **Frontend bugs** may cause duplicate command invocations
+3. **Network issues** may cause retries that result in duplicate calls
+
+Without idempotency, duplicate calls lead to:
+- Duplicate PTY processes spawned
+- Multiple polling loops wasting resources
+- Conflicting state modifications
+
+### Global Lock Pattern
+
+For commands that perform initialization (like `start_opencode_server`), use a **global lock** to serialize concurrent calls:
+
+```rust
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub struct OpencodeState {
+    cache: Arc<Mutex<HashMap<String, OpencodeServerInfo>>>,
+    global_lock: Arc<Mutex<()>>,  // Single lock for all init operations
+}
+
+impl OpencodeState {
+    pub fn new() -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(HashMap::new())),
+            global_lock: Arc::new(Mutex::new(())),
+        }
+    }
+}
+```
+
+### Command Implementation Pattern
+
+```rust
+#[tauri::command]
+pub async fn start_opencode_server(
+    state: tauri::State<'_, OpencodeState>,
+    worktree_path: String,
+    port: u16,
+    hostname: String,
+) -> Result<OpencodeServerInfo, String> {
+    // 1. Acquire global lock - second caller blocks here
+    let _guard = state.global_lock.lock().await;
+
+    // 2. Check cache (double-check pattern after acquiring lock)
+    {
+        let cache = state.cache.lock().await;
+        if let Some(cached) = cache.get(&worktree_path) {
+            return Ok(cached.clone());  // Return cached result immediately
+        }
+    }
+
+    // 3. Perform initialization (health polling, session creation, etc.)
+    // ...
+
+    // 4. Store result in cache
+    {
+        let mut cache = state.cache.lock().await;
+        cache.insert(worktree_path.clone(), result.clone());
+    }
+
+    Ok(result)
+}
+```
+
+### Execution Flow
+
+```
+Call A                          Call B
+────────                        ────────
+acquires global lock
+checks cache → miss
+performs init (1/30)...        (blocked on global lock)
+performs init (2/30)...
+...
+performs init (30/30)
+stores in cache
+releases lock ────────────────→→
+                               acquires global lock
+                               checks cache → HIT!
+                               returns cached result immediately
+```
+
+### Key Principles
+
+| Principle | Implementation |
+|-----------|----------------|
+| **Lock before cache check** | Prevents race condition where both callers see cache miss |
+| **Cache results** | Subsequent callers return immediately without re-initialization |
+| **Release lock after cache store** | Ensures next waiter finds populated cache |
+| **Use global lock** | Simpler than per-resource locks; works for initialization commands |
+
+### When to Use Idempotency
+
+Apply this pattern to commands that:
+- Perform expensive initialization (polling, process spawning)
+- Create resources that should only exist once (sessions, connections)
+- Modify shared state that could conflict with duplicate calls
+
+### Cleanup Pattern
+
+When a resource is stopped/destroyed, clear the cache:
+
+```rust
+#[tauri::command]
+pub async fn stop_opencode_server(
+    state: tauri::State<'_, OpencodeState>,
+    worktree_path: String,
+) -> Result<(), String> {
+    let _guard = state.global_lock.lock().await;  // Serialize with init
+    let mut cache = state.cache.lock().await;
+    cache.remove(&worktree_path);
+    Ok(())
+}
+```
+
+### Per-Worktree Lock Pattern
+
+For git operations that could conflict when run concurrently on the same worktree, use **per-worktree locks** to serialize operations while allowing parallelism across different worktrees:
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub struct GitState {
+    locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+}
+
+impl GitState {
+    pub fn new() -> Self {
+        Self {
+            locks: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub async fn get_lock(&self, worktree_path: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.locks.lock().await;
+        locks.entry(worktree_path.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+}
+```
+
+### Git Command Implementation Pattern
+
+Git commands that modify worktree state should acquire a per-worktree lock and run blocking operations off the main thread:
+
+```rust
+#[tauri::command]
+pub async fn commit(
+    state: State<'_, GitState>,
+    worktree_path: String,
+    message: String,
+) -> Result<String, String> {
+    // 1. Acquire per-worktree lock
+    let lock: Arc<Mutex<()>> = state.get_lock(&worktree_path).await;
+    let _guard = lock.lock().await;
+
+    // 2. Run blocking git operation off main thread
+    let path = worktree_path.clone();
+    let msg = message.clone();
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .args(&["-C", &path, "commit", "-m", &msg])
+            .output()
+            .map_err(|e| format!("Failed to commit: {}", e))?;
+
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+```
+
+### Why Per-Worktree Locks?
+
+| Scenario | Without Locks | With Per-Worktree Locks |
+|----------|--------------|------------------------|
+| Rapid worktree switching | Cascading git operations freeze UI | Operations serialized per-worktree |
+| Duplicate invocations (React StrictMode) | Race conditions, corrupted state | Second call blocks until first completes |
+| Concurrent operations on different worktrees | Full serialization | Parallel execution |
+
+### Protected Git Commands
+
+The following git commands use per-worktree locks and `spawn_blocking`:
+
+- `get_worktree_status` - Read worktree state
+- `get_diff` - Read diff output  
+- `get_diff_stats` - Read diff statistics
+- `get_git_log` - Read git history
+- `stage_file` / `stage_all_files` - Modify staging area
+- `unstage_file` / `unstage_all_files` - Modify staging area
+- `discard_changes` - Discard local changes
+- `commit` - Create commit
+- `git_push` - Push to remote
+
 ## Available Scripts
 
 ```bash

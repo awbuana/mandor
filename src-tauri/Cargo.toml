@@ -9,17 +9,21 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-pty = "0.2"
 tauri-plugin-shell = "2"
 tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+notify = "6"
+notify-debouncer-mini = "0.4"
 tokio = { version = "1", features = ["full"] }
 chrono = "0.4"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 uuid = { version = "1", features = ["v4"] }
 futures = "0.3"
 tauri-plugin-devtools = "2.0.0"
+log = "0.4"
 
 [features]
 default = ["custom-protocol"]

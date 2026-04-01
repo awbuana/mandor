@@ -1,7 +1,12 @@
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+
+macro_rules! log_terminal {
+    ($($arg:tt)*) => (info!(target: "mandor::terminal", $($arg)*))
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TerminalSession {
@@ -27,8 +32,14 @@ pub fn spawn_terminal(
     worktree_path: String,
     agent_type: String,
 ) -> Result<TerminalSession, String> {
-    let session_id = format!("term_{}_{}", 
-        agent_type, 
+    log_terminal!(
+        "spawn_terminal called with worktree_path: {}, agent_type: {}",
+        worktree_path,
+        agent_type
+    );
+    let session_id = format!(
+        "term_{}_{}",
+        agent_type,
         chrono::Utc::now().timestamp_millis()
     );
 
@@ -65,7 +76,9 @@ pub fn spawn_terminal(
         }
     };
 
-    let _child = cmd.spawn().map_err(|e| format!("Failed to spawn terminal: {}", e))?;
+    let _child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn terminal: {}", e))?;
 
     Ok(TerminalSession {
         id: session_id,
@@ -76,15 +89,27 @@ pub fn spawn_terminal(
 
 #[tauri::command]
 pub fn write_to_terminal(_session_id: String, _input: String) -> Result<(), String> {
+    log_terminal!(
+        "write_to_terminal called with session_id: {}, input: {}",
+        _session_id,
+        _input
+    );
     Ok(())
 }
 
 #[tauri::command]
 pub fn resize_terminal(_session_id: String, _cols: u16, _rows: u16) -> Result<(), String> {
+    log_terminal!(
+        "resize_terminal called with session_id: {}, cols: {}, rows: {}",
+        _session_id,
+        _cols,
+        _rows
+    );
     Ok(())
 }
 
 #[tauri::command]
 pub fn kill_terminal(_session_id: String) -> Result<(), String> {
+    log_terminal!("kill_terminal called with session_id: {}", _session_id);
     Ok(())
 }

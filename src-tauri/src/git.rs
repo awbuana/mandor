@@ -1,6 +1,15 @@
+use crate::git_state::GitState;
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
+use tauri::State;
+use tokio::sync::Mutex;
+
+macro_rules! log_git {
+    ($($arg:tt)*) => (info!(target: "mandor::git", $($arg)*))
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Worktree {
@@ -29,30 +38,6 @@ pub struct WorktreeStatus {
     pub untracked: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DiffLine {
-    pub line_number: i32,
-    pub content: String,
-    pub change_type: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FileDiff {
-    pub path: String,
-    pub old_path: Option<String>,
-    pub lines_added: i32,
-    pub lines_deleted: i32,
-    pub hunks: Vec<DiffHunk>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DiffHunk {
-    pub old_start: i32,
-    pub old_lines: i32,
-    pub new_start: i32,
-    pub new_lines: i32,
-    pub lines: Vec<DiffLine>,
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GitCommit {
@@ -66,6 +51,7 @@ pub struct GitCommit {
 
 #[tauri::command]
 pub fn list_worktrees(repo_path: String) -> Result<Vec<Worktree>, String> {
+    log_git!("list_worktrees called with repo_path: {}", repo_path);
     let output = Command::new("git")
         .args(&["-C", &repo_path, "worktree", "list", "--porcelain"])
         .output()
@@ -121,6 +107,7 @@ pub fn create_worktree(
     branch: String,
     path: String,
 ) -> Result<Worktree, String> {
+    log_git!("create_worktree called with repo_path: {}, branch: {}, path: {}", repo_path, branch, path);
     let worktree_path = PathBuf::from(&repo_path).join(&path);
 
     // Check if branch exists
@@ -172,6 +159,7 @@ pub fn create_worktree(
 
 #[tauri::command]
 pub fn delete_worktree(repo_path: String, worktree_path: String) -> Result<(), String> {
+    log_git!("delete_worktree called with repo_path: {}, worktree_path: {}", repo_path, worktree_path);
     let output = Command::new("git")
         .args(&["-C", &repo_path, "worktree", "remove", "-f", &worktree_path])
         .output()
@@ -184,24 +172,25 @@ pub fn delete_worktree(repo_path: String, worktree_path: String) -> Result<(), S
     Ok(())
 }
 
-#[tauri::command]
-pub fn get_worktree_status(worktree_path: String) -> Result<WorktreeStatus, String> {
+/// Core logic for computing worktree status. Called both by the Tauri command
+/// and by the filesystem watcher to push real-time updates.
+pub fn compute_worktree_status(worktree_path: &str) -> Result<WorktreeStatus, String> {
     let branch_output = Command::new("git")
-        .args(&["-C", &worktree_path, "rev-parse", "--abbrev-ref", "HEAD"])
+        .args(&["-C", worktree_path, "rev-parse", "--abbrev-ref", "HEAD"])
         .output()
         .map_err(|e| format!("Failed to get branch: {}", e))?;
 
     let branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
 
     let commit_output = Command::new("git")
-        .args(&["-C", &worktree_path, "rev-parse", "--short", "HEAD"])
+        .args(&["-C", worktree_path, "rev-parse", "--short", "HEAD"])
         .output()
         .map_err(|e| format!("Failed to get commit: {}", e))?;
 
     let commit = String::from_utf8_lossy(&commit_output.stdout).trim().to_string();
 
     let status_output = Command::new("git")
-        .args(&["-C", &worktree_path, "status", "--porcelain"])
+        .args(&["-C", worktree_path, "status", "--porcelain"])
         .output()
         .map_err(|e| format!("Failed to get status: {}", e))?;
 
@@ -220,7 +209,25 @@ pub fn get_worktree_status(worktree_path: String) -> Result<WorktreeStatus, Stri
         let file_path = line[3..].to_string();
 
         match (index_status, worktree_status) {
-            ('?', '?') => untracked.push(file_path),
+            ('?', '?') => {
+                if file_path.ends_with('/') {
+                    let ls_output = Command::new("git")
+                        .args(&[
+                            "-C", worktree_path,
+                            "ls-files", "--others", "--exclude-standard", &file_path,
+                        ])
+                        .output();
+                    if let Ok(out) = ls_output {
+                        for child in String::from_utf8_lossy(&out.stdout).lines() {
+                            if !child.is_empty() {
+                                untracked.push(child.to_string());
+                            }
+                        }
+                    }
+                } else {
+                    untracked.push(file_path);
+                }
+            },
             (' ', m) if m != ' ' => modified.push(FileStatus {
                 path: file_path,
                 status: worktree_status.to_string(),
@@ -259,74 +266,160 @@ pub fn get_worktree_status(worktree_path: String) -> Result<WorktreeStatus, Stri
 }
 
 #[tauri::command]
-pub fn get_diff(worktree_path: String, file_path: Option<String>) -> Result<String, String> {
-    // First try regular diff for tracked/modified files
-    let diff_output = if let Some(ref file) = file_path {
+pub async fn get_worktree_status(
+    state: State<'_, GitState>,
+    worktree_path: String,
+) -> Result<WorktreeStatus, String> {
+    log_git!("get_worktree_status called with worktree_path: {}", worktree_path);
+    let lock: Arc<Mutex<()>> = state.get_lock(&worktree_path).await;
+    let _guard = lock.lock().await;
+    let path = worktree_path.clone();
+    tokio::task::spawn_blocking(move || {
+        compute_worktree_status(&path)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+pub async fn git_push(state: State<'_, GitState>, worktree_path: String) -> Result<(), String> {
+    log_git!("git_push called with worktree_path: {}", worktree_path);
+    let lock: Arc<Mutex<()>> = state.get_lock(&worktree_path).await;
+    let _guard = lock.lock().await;
+    let path = worktree_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .args(&["-C", &path, "push", "-u", "origin", "HEAD"])
+            .output()
+            .map_err(|e| format!("Failed to execute git push: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            if stderr.contains("upstream branch") || stderr.contains("no upstream branch") {
+                let branch_output = Command::new("git")
+                    .args(&["-C", &path, "rev-parse", "--abbrev-ref", "HEAD"])
+                    .output()
+                    .map_err(|e| format!("Failed to get branch name: {}", e))?;
+                if branch_output.status.success() {
+                    let branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+                    let setup_output = Command::new("git")
+                        .args(&["-C", &path, "push", "-u", "origin", &branch])
+                        .output()
+                        .map_err(|e| format!("Failed to execute git push -u: {}", e))?;
+                    if !setup_output.status.success() {
+                        return Err(String::from_utf8_lossy(&setup_output.stderr).to_string());
+                    }
+                    return Ok(());
+                }
+            }
+            return Err(stderr);
+        }
+
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+pub fn compute_diff(worktree_path: &str, file_path: Option<&str>) -> Result<String, String> {
+    let diff_output = if let Some(file) = file_path {
         Command::new("git")
-            .args(&["-C", &worktree_path, "diff", "--", file])
+            .args(&["-C", worktree_path, "diff", "--", file])
             .output()
             .map_err(|e| format!("Failed to get diff: {}", e))?
     } else {
         Command::new("git")
-            .args(&["-C", &worktree_path, "diff"])
+            .args(&["-C", worktree_path, "diff"])
             .output()
             .map_err(|e| format!("Failed to get diff: {}", e))?
     };
 
-    // If we have output, return it
     if diff_output.status.success() && !diff_output.stdout.is_empty() {
         return Ok(String::from_utf8_lossy(&diff_output.stdout).to_string());
     }
 
-    // If no diff output, check if it's a new/untracked file
-    if let Some(ref file) = file_path {
-        // Check if file is untracked
+    if let Some(file) = file_path {
+        let full_path = PathBuf::from(worktree_path).join(file);
+
+        if full_path.is_dir() {
+            let ls_output = Command::new("git")
+                .args(&[
+                    "-C", worktree_path,
+                    "ls-files", "--others", "--exclude-standard", file,
+                ])
+                .output()
+                .map_err(|e| format!("Failed to list untracked files in dir: {}", e))?;
+
+            let mut combined = String::new();
+            for child in String::from_utf8_lossy(&ls_output.stdout).lines() {
+                if child.is_empty() {
+                    continue;
+                }
+                if let Ok(child_diff) = compute_diff(worktree_path, Some(child)) {
+                    combined.push_str(&child_diff);
+                }
+            }
+            return Ok(combined);
+        }
+
         let untracked_output = Command::new("git")
-            .args(&["-C", &worktree_path, "ls-files", "--others", "--exclude-standard", file])
+            .args(&["-C", worktree_path, "ls-files", "--others", "--exclude-standard", file])
             .output()
             .map_err(|e| format!("Failed to check untracked files: {}", e))?;
 
         let is_untracked = String::from_utf8_lossy(&untracked_output.stdout).trim() == file;
 
-        // Also check if file is staged (new file)
         let staged_output = Command::new("git")
-            .args(&["-C", &worktree_path, "diff", "--cached", "--name-only", "--", file])
+            .args(&["-C", worktree_path, "diff", "--cached", "--name-only", "--", file])
             .output()
             .map_err(|e| format!("Failed to check staged files: {}", e))?;
 
         let is_staged_new = !String::from_utf8_lossy(&staged_output.stdout).trim().is_empty();
 
-        // For new files, generate a diff showing all content as added
         if is_untracked || is_staged_new {
-            let file_path_full = PathBuf::from(&worktree_path).join(file);
-            
+            let file_path_full = PathBuf::from(worktree_path).join(file);
+
             if file_path_full.exists() {
-                // Read file content and format as diff
                 let content = std::fs::read_to_string(&file_path_full)
                     .map_err(|e| format!("Failed to read file: {}", e))?;
-                
+
                 let line_count = content.lines().count();
-                
-                // Create diff header
+
                 let mut diff = format!("diff --git a/{} b/{}\n", file, file);
                 diff.push_str(&format!("new file mode 100644\n"));
                 diff.push_str(&format!("index 0000000..{}\n", "e69de29"));
                 diff.push_str(&format!("--- /dev/null\n"));
                 diff.push_str(&format!("+++ b/{}\n", file));
                 diff.push_str(&format!("@@ -0,0 +1,{} @@\n", line_count));
-                
-                // Add all lines with + prefix
+
                 for line in content.lines() {
                     diff.push_str(&format!("+{}\n", line));
                 }
-                
+
                 return Ok(diff);
             }
         }
     }
 
-    // Return empty string if no diff found
     Ok(String::new())
+}
+
+#[tauri::command]
+pub async fn get_diff(
+    state: State<'_, GitState>,
+    worktree_path: String,
+    file_path: Option<String>,
+) -> Result<String, String> {
+    log_git!("get_diff called with worktree_path: {}, file_path: {:?}", worktree_path, file_path);
+    let lock: Arc<Mutex<()>> = state.get_lock(&worktree_path).await;
+    let _guard = lock.lock().await;
+    let path = worktree_path.clone();
+    let file_path_clone = file_path.clone();
+    tokio::task::spawn_blocking(move || {
+        compute_diff(&path, file_path_clone.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -336,47 +429,53 @@ pub struct DiffStats {
     pub deletions: i32,
 }
 
-#[tauri::command]
-pub fn get_diff_stats(worktree_path: String) -> Result<DiffStats, String> {
-    let output = Command::new("git")
-        .args(&["-C", &worktree_path, "diff", "--stat"])
+/// Core logic for computing diff stats. Called both by the Tauri command
+/// and by the filesystem watcher to push real-time updates.
+pub fn compute_diff_stats(worktree_path: &str) -> Result<DiffStats, String> {
+    let status_output = Command::new("git")
+        .args(&["-C", worktree_path, "status", "--porcelain"])
         .output()
-        .map_err(|e| format!("Failed to get diff stats: {}", e))?;
+        .map_err(|e| format!("Failed to get status for diff stats: {}", e))?;
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
-    }
+    let status_stdout = String::from_utf8_lossy(&status_output.stdout);
+    let files_changed = status_stdout
+        .lines()
+        .filter(|l| l.len() >= 2)
+        .count() as i32;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut files_changed = 0;
-    let mut insertions = 0;
-    let mut deletions = 0;
+    let mut insertions = 0i32;
+    let mut deletions = 0i32;
 
-    for line in stdout.lines() {
-        // Parse lines like: " src/main.rs | 10 ++++++-----"
-        // Or summary line: " 3 files changed, 15 insertions(+), 7 deletions(-)"
-        if line.contains("files changed") || line.contains("file changed") {
-            // Parse summary line
-            let parts: Vec<&str> = line.split(',').collect();
-            for part in parts {
-                let part = part.trim();
-                if part.contains("files changed") || part.contains("file changed") {
-                    if let Some(num) = part.split_whitespace().next() {
-                        files_changed = num.parse().unwrap_or(0);
-                    }
-                } else if part.contains("insertions") || part.contains("insertion") {
-                    if let Some(num) = part.split_whitespace().next() {
-                        insertions = num.parse().unwrap_or(0);
-                    }
-                } else if part.contains("deletions") || part.contains("deletion") {
-                    if let Some(num) = part.split_whitespace().next() {
-                        deletions = num.parse().unwrap_or(0);
+    for extra_args in &[&[][..], &["--cached"][..]] {
+        let mut args = vec!["-C", worktree_path, "diff", "--stat"];
+        args.extend_from_slice(extra_args);
+
+        let output = Command::new("git")
+            .args(&args)
+            .output()
+            .map_err(|e| format!("Failed to get diff stats: {}", e))?;
+
+        if !output.status.success() {
+            continue;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if line.contains("files changed") || line.contains("file changed") {
+                let parts: Vec<&str> = line.split(',').collect();
+                for part in parts {
+                    let part = part.trim();
+                    if part.contains("insertions") || part.contains("insertion") {
+                        if let Some(num) = part.split_whitespace().next() {
+                            insertions += num.parse::<i32>().unwrap_or(0);
+                        }
+                    } else if part.contains("deletions") || part.contains("deletion") {
+                        if let Some(num) = part.split_whitespace().next() {
+                            deletions += num.parse::<i32>().unwrap_or(0);
+                        }
                     }
                 }
             }
-        } else if line.contains('|') && !line.starts_with('-') {
-            // Count individual file lines
-            files_changed += 1;
         }
     }
 
@@ -388,67 +487,180 @@ pub fn get_diff_stats(worktree_path: String) -> Result<DiffStats, String> {
 }
 
 #[tauri::command]
-pub fn stage_file(worktree_path: String, file_path: String) -> Result<(), String> {
-    let output = Command::new("git")
-        .args(&["-C", &worktree_path, "add", &file_path])
-        .output()
-        .map_err(|e| format!("Failed to stage file: {}", e))?;
-
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
-    }
-
-    Ok(())
+pub async fn get_diff_stats(
+    state: State<'_, GitState>,
+    worktree_path: String,
+) -> Result<DiffStats, String> {
+    log_git!("get_diff_stats called with worktree_path: {}", worktree_path);
+    let lock: Arc<Mutex<()>> = state.get_lock(&worktree_path).await;
+    let _guard = lock.lock().await;
+    let path = worktree_path.clone();
+    tokio::task::spawn_blocking(move || {
+        compute_diff_stats(&path)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-pub fn unstage_file(worktree_path: String, file_path: String) -> Result<(), String> {
-    let output = Command::new("git")
-        .args(&["-C", &worktree_path, "reset", "HEAD", &file_path])
-        .output()
-        .map_err(|e| format!("Failed to unstage file: {}", e))?;
+pub async fn stage_file(
+    state: State<'_, GitState>,
+    worktree_path: String,
+    file_path: String,
+) -> Result<(), String> {
+    log_git!("stage_file called with worktree_path: {}, file_path: {}", worktree_path, file_path);
+    let lock: Arc<Mutex<()>> = state.get_lock(&worktree_path).await;
+    let _guard = lock.lock().await;
+    let path = worktree_path.clone();
+    let file = file_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .args(&["-C", &path, "add", &file])
+            .output()
+            .map_err(|e| format!("Failed to stage file: {}", e))?;
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
-    }
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
 
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-pub fn discard_changes(worktree_path: String, file_path: String) -> Result<(), String> {
-    let output = Command::new("git")
-        .args(&["-C", &worktree_path, "checkout", "--", &file_path])
-        .output()
-        .map_err(|e| format!("Failed to discard changes: {}", e))?;
+pub async fn stage_all_files(state: State<'_, GitState>, worktree_path: String) -> Result<(), String> {
+    log_git!("stage_all_files called with worktree_path: {}", worktree_path);
+    let lock: Arc<Mutex<()>> = state.get_lock(&worktree_path).await;
+    let _guard = lock.lock().await;
+    let path = worktree_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .args(&["-C", &path, "add", "-A"])
+            .output()
+            .map_err(|e| format!("Failed to stage all files: {}", e))?;
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
-    }
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
 
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-pub fn commit(worktree_path: String, message: String) -> Result<String, String> {
-    let output = Command::new("git")
-        .args(&["-C", &worktree_path, "commit", "-m", &message])
-        .output()
-        .map_err(|e| format!("Failed to commit: {}", e))?;
+pub async fn unstage_all_files(state: State<'_, GitState>, worktree_path: String) -> Result<(), String> {
+    log_git!("unstage_all_files called with worktree_path: {}", worktree_path);
+    let lock: Arc<Mutex<()>> = state.get_lock(&worktree_path).await;
+    let _guard = lock.lock().await;
+    let path = worktree_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .args(&["-C", &path, "reset"])
+            .output()
+            .map_err(|e| format!("Failed to unstage all files: {}", e))?;
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
 
-    if !output.status.success() {
-        let error_msg = if stderr.is_empty() { stdout } else { stderr };
-        return Err(error_msg.to_string());
-    }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
 
-    Ok(stdout.to_string())
+#[tauri::command]
+pub async fn unstage_file(
+    state: State<'_, GitState>,
+    worktree_path: String,
+    file_path: String,
+) -> Result<(), String> {
+    log_git!("unstage_file called with worktree_path: {}, file_path: {}", worktree_path, file_path);
+    let lock: Arc<Mutex<()>> = state.get_lock(&worktree_path).await;
+    let _guard = lock.lock().await;
+    let path = worktree_path.clone();
+    let file = file_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .args(&["-C", &path, "reset", "HEAD", &file])
+            .output()
+            .map_err(|e| format!("Failed to unstage file: {}", e))?;
+
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
+
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+pub async fn discard_changes(
+    state: State<'_, GitState>,
+    worktree_path: String,
+    file_path: String,
+) -> Result<(), String> {
+    log_git!("discard_changes called with worktree_path: {}, file_path: {}", worktree_path, file_path);
+    let lock: Arc<Mutex<()>> = state.get_lock(&worktree_path).await;
+    let _guard = lock.lock().await;
+    let path = worktree_path.clone();
+    let file = file_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .args(&["-C", &path, "checkout", "--", &file])
+            .output()
+            .map_err(|e| format!("Failed to discard changes: {}", e))?;
+
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
+
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+pub async fn commit(
+    state: State<'_, GitState>,
+    worktree_path: String,
+    message: String,
+) -> Result<String, String> {
+    log_git!("commit called with worktree_path: {}, message: {}", worktree_path, message);
+    let lock: Arc<Mutex<()>> = state.get_lock(&worktree_path).await;
+    let _guard = lock.lock().await;
+    let path = worktree_path.clone();
+    let msg = message.clone();
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .args(&["-C", &path, "commit", "-m", &msg])
+            .output()
+            .map_err(|e| format!("Failed to commit: {}", e))?;
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        if !output.status.success() {
+            let error_msg = if stderr.is_empty() { stdout } else { stderr };
+            return Err(error_msg.to_string());
+        }
+
+        Ok(stdout.to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
 pub fn get_branches(repo_path: String) -> Result<Vec<String>, String> {
+    log_git!("get_branches called with repo_path: {}", repo_path);
     let output = Command::new("git")
         .args(&["-C", &repo_path, "branch", "-a", "--format=%(refname:short)"])
         .output()
@@ -468,46 +680,59 @@ pub fn get_branches(repo_path: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub fn get_git_log(worktree_path: String, limit: Option<i32>) -> Result<Vec<GitCommit>, String> {
-    let limit = limit.unwrap_or(50);
-    
-    let output = Command::new("git")
-        .args(&[
-            "-C", &worktree_path,
-            "log",
-            &format!("--max-count={}", limit),
-            "--pretty=format:%H|%h|%s|%an|%ar|%D"
-        ])
-        .output()
-        .map_err(|e| format!("Failed to get git log: {}", e))?;
+pub async fn get_git_log(
+    state: State<'_, GitState>,
+    worktree_path: String,
+    limit: Option<i32>,
+) -> Result<Vec<GitCommit>, String> {
+    log_git!("get_git_log called with worktree_path: {}, limit: {:?}", worktree_path, limit);
+    let lock: Arc<Mutex<()>> = state.get_lock(&worktree_path).await;
+    let _guard = lock.lock().await;
+    let path = worktree_path.clone();
+    let lim = limit.unwrap_or(50);
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
-    }
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .args(&[
+                "-C", &path,
+                "log",
+                &format!("--max-count={}", lim),
+                "--pretty=format:%H|%h|%s|%an|%ar|%D"
+            ])
+            .output()
+            .map_err(|e| format!("Failed to get git log: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut commits = Vec::new();
-
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.splitn(6, '|').collect();
-        if parts.len() >= 5 {
-            let refs = parts.get(5).unwrap_or(&"");
-            commits.push(GitCommit {
-                hash: parts[0].to_string(),
-                short_hash: parts[1].to_string(),
-                message: parts[2].to_string(),
-                author: parts[3].to_string(),
-                date: parts[4].to_string(),
-                is_head: refs.contains("HEAD"),
-            });
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
         }
-    }
 
-    Ok(commits)
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut commits = Vec::new();
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.splitn(6, '|').collect();
+            if parts.len() >= 5 {
+                let refs = parts.get(5).unwrap_or(&"");
+                commits.push(GitCommit {
+                    hash: parts[0].to_string(),
+                    short_hash: parts[1].to_string(),
+                    message: parts[2].to_string(),
+                    author: parts[3].to_string(),
+                    date: parts[4].to_string(),
+                    is_head: refs.contains("HEAD"),
+                });
+            }
+        }
+
+        Ok(commits)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
 pub async fn open_repository(app: tauri::AppHandle) -> Result<String, String> {
+    log_git!("open_repository called");
     use tauri_plugin_dialog::DialogExt;
 
     let folder_path = app

@@ -22,6 +22,12 @@ export interface WorktreeStatus {
   untracked: string[];
 }
 
+export interface DiffStats {
+  files_changed: number;
+  insertions: number;
+  deletions: number;
+}
+
 export interface GitCommit {
   hash: string;
   short_hash: string;
@@ -57,8 +63,6 @@ export interface FileComment {
   parentId?: string;
   resolved: boolean;
 }
-
-export type AgentType = 'opencode' | 'claude' | 'cursor' | 'bash';
 
 /** Configuration for an external code editor that can be launched from the app */
 export interface EditorType {
