@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   GitCommit as GitCommitIcon
 } from '@phosphor-icons/react'
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { FileStatus, FileComment, GitCommit as GitCommitType } from '@/types'
 import { cn } from '@/lib/utils'
@@ -120,15 +120,59 @@ export function ReviewPanel() {
   const [gitLogExpanded, setGitLogExpanded] = useState(true)
   const [implementWarning, setImplementWarning] = useState(false)
 
+  const worktreePathRef = useRef<string | null>(null)
+
   // Load worktree status and git log when selected worktree changes
   useEffect(() => {
-    if (selectedWorktree) {
-      loadWorktreeStatus()
-      loadGitLog()
-    }
-  }, [selectedWorktree?.path])
+    const currentPath = selectedWorktree?.path || null
+    worktreePathRef.current = currentPath
 
-  const loadGitLog = async () => {
+    if (!selectedWorktree) {
+      setIsLoading(false)
+      return
+    }
+
+    const loadData = async () => {
+      setIsLoading(true)
+      setError(null)
+
+      try {
+        const status = await invoke('get_worktree_status', {
+          worktreePath: currentPath
+        })
+        if (worktreePathRef.current !== currentPath) return
+        setWorktreeStatus(currentPath!, status as any)
+      } catch (err) {
+        if (worktreePathRef.current !== currentPath) return
+        console.error('Failed to load worktree status:', err)
+        setError('Failed to load changes')
+      }
+
+      try {
+        const log = await invoke('get_git_log', {
+          worktreePath: currentPath,
+          limit: 50
+        })
+        if (worktreePathRef.current !== currentPath) return
+        setGitLog(log as GitCommitType[])
+      } catch (err) {
+        if (worktreePathRef.current !== currentPath) return
+        console.error('Failed to load git log:', err)
+      }
+
+      if (worktreePathRef.current === currentPath) {
+        setIsLoading(false)
+      }
+    }
+
+    loadData()
+
+    return () => {
+      worktreePathRef.current = null
+    }
+  }, [selectedWorktree?.path, setWorktreeStatus])
+
+  const loadGitLog = useCallback(async () => {
     if (!selectedWorktree) return
     try {
       const log = await invoke('get_git_log', {
@@ -139,9 +183,9 @@ export function ReviewPanel() {
     } catch (err) {
       console.error('Failed to load git log:', err)
     }
-  }
+  }, [selectedWorktree?.path])
 
-  const loadWorktreeStatus = async () => {
+  const loadWorktreeStatus = useCallback(async () => {
     if (!selectedWorktree) return
 
     setIsLoading(true)
@@ -158,7 +202,7 @@ export function ReviewPanel() {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [selectedWorktree?.path, setWorktreeStatus])
 
   const status = selectedWorktree ? worktreeStatus[selectedWorktree.path] : null
 

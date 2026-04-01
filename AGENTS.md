@@ -415,6 +415,58 @@ src-tauri/
 - **Terminal**: XTerm.js
 - **Diff**: Custom diff viewer implementation
 
+## Troubleshooting
+
+### RemoteLayerTreeDrawingAreaProxyMac Error on macOS
+
+**Symptom**: Console shows `RemoteLayerTreeDrawingAreaProxyMac::scheduleDisplayLink(): page has no displayID` and UI may hang during worktree switching.
+
+**Root Cause**: This WebKit/macOS error occurs when synchronous blocking operations (like git commands) run on the Tauri main thread, blocking the UI event loop.
+
+**Fix**: All git operations that could block the UI must be async:
+
+1. **Rust backend**: Use `spawn_blocking` for git operations:
+   ```rust
+   #[tauri::command]
+   pub async fn get_worktree_status(worktree_path: String) -> Result<WorktreeStatus, String> {
+       let path = worktree_path.clone();
+       tokio::task::spawn_blocking(move || {
+           compute_worktree_status(&path)
+       })
+       .await
+       .map_err(|e| format!("Task join error: {}", e))?
+   }
+   ```
+
+2. **Frontend**: Cancel stale requests when switching worktrees:
+   ```typescript
+   const worktreePathRef = useRef<string | null>(null)
+   
+   useEffect(() => {
+       const currentPath = selectedWorktree?.path || null
+       worktreePathRef.current = currentPath
+       
+       const loadData = async () => {
+           const status = await invoke('get_worktree_status', { worktreePath: currentPath })
+           // Ignore if worktree changed while waiting
+           if (worktreePathRef.current !== currentPath) return
+           setWorktreeStatus(currentPath!, status as any)
+       }
+       loadData()
+       
+       return () => { worktreePathRef.current = null }
+   }, [selectedWorktree?.path])
+   ```
+
+### Worktree Switching Performance
+
+**Issue**: Rapid worktree switching causes cascading git operations that stack up and freeze the UI.
+
+**Fix**: 
+- All git commands are async with `spawn_blocking` in Rust
+- Frontend uses ref-based cancellation to ignore stale results
+- Single effect loads both status and git log to avoid duplicate calls
+
 ## Available Scripts
 
 ```bash

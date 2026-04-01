@@ -8,7 +8,7 @@ import {
 import { FileComment } from '@/types'
 import { InlineDiffViewer } from '@/components/diff/InlineDiffViewer'
 import { TerminalView } from '@/components/terminal/TerminalInstance'
-import { TuiView } from '@/components/terminal/TuiInstance'
+import { TuiView } from '@/components/terminal/TUIInstance'
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 

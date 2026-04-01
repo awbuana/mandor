@@ -198,9 +198,6 @@ pub fn compute_worktree_status(worktree_path: &str) -> Result<WorktreeStatus, St
 
         match (index_status, worktree_status) {
             ('?', '?') => {
-                // git status --porcelain reports untracked directories as "dir/"
-                // (with trailing slash). Expand them into individual files so the
-                // frontend always receives concrete file paths.
                 if file_path.ends_with('/') {
                     let ls_output = Command::new("git")
                         .args(&[
@@ -218,7 +215,7 @@ pub fn compute_worktree_status(worktree_path: &str) -> Result<WorktreeStatus, St
                 } else {
                     untracked.push(file_path);
                 }
-            }
+            },
             (' ', m) if m != ' ' => modified.push(FileStatus {
                 path: file_path,
                 status: worktree_status.to_string(),
@@ -257,8 +254,13 @@ pub fn compute_worktree_status(worktree_path: &str) -> Result<WorktreeStatus, St
 }
 
 #[tauri::command]
-pub fn get_worktree_status(worktree_path: String) -> Result<WorktreeStatus, String> {
-    compute_worktree_status(&worktree_path)
+pub async fn get_worktree_status(worktree_path: String) -> Result<WorktreeStatus, String> {
+    let path = worktree_path.clone();
+    tokio::task::spawn_blocking(move || {
+        compute_worktree_status(&path)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
@@ -381,14 +383,7 @@ pub struct DiffStats {
 
 /// Core logic for computing diff stats. Called both by the Tauri command
 /// and by the filesystem watcher to push real-time updates.
-///
-/// `git diff --stat` only covers tracked modified/deleted files. To also
-/// account for staged changes and untracked new files we combine three sources:
-///   - `git diff --stat`           → unstaged changes on tracked files (+/- lines)
-///   - `git diff --cached --stat`  → staged changes (+/- lines)
-///   - `git status --porcelain`    → files_changed count (covers untracked too)
 pub fn compute_diff_stats(worktree_path: &str) -> Result<DiffStats, String> {
-    // --- files_changed: count via git status (covers untracked new files) ---
     let status_output = Command::new("git")
         .args(&["-C", worktree_path, "status", "--porcelain"])
         .output()
@@ -400,7 +395,6 @@ pub fn compute_diff_stats(worktree_path: &str) -> Result<DiffStats, String> {
         .filter(|l| l.len() >= 2)
         .count() as i32;
 
-    // --- insertions/deletions: combine unstaged + staged diffs ---
     let mut insertions = 0i32;
     let mut deletions = 0i32;
 
@@ -419,7 +413,6 @@ pub fn compute_diff_stats(worktree_path: &str) -> Result<DiffStats, String> {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines() {
-            // Summary line: " 3 files changed, 15 insertions(+), 7 deletions(-)"
             if line.contains("files changed") || line.contains("file changed") {
                 let parts: Vec<&str> = line.split(',').collect();
                 for part in parts {
@@ -446,8 +439,13 @@ pub fn compute_diff_stats(worktree_path: &str) -> Result<DiffStats, String> {
 }
 
 #[tauri::command]
-pub fn get_diff_stats(worktree_path: String) -> Result<DiffStats, String> {
-    compute_diff_stats(&worktree_path)
+pub async fn get_diff_stats(worktree_path: String) -> Result<DiffStats, String> {
+    let path = worktree_path.clone();
+    tokio::task::spawn_blocking(move || {
+        compute_diff_stats(&path)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
@@ -559,42 +557,47 @@ pub fn get_branches(repo_path: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub fn get_git_log(worktree_path: String, limit: Option<i32>) -> Result<Vec<GitCommit>, String> {
-    let limit = limit.unwrap_or(50);
+pub async fn get_git_log(worktree_path: String, limit: Option<i32>) -> Result<Vec<GitCommit>, String> {
+    let path = worktree_path.clone();
+    let lim = limit.unwrap_or(50);
+    
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("git")
+            .args(&[
+                "-C", &path,
+                "log",
+                &format!("--max-count={}", lim),
+                "--pretty=format:%H|%h|%s|%an|%ar|%D"
+            ])
+            .output()
+            .map_err(|e| format!("Failed to get git log: {}", e))?;
 
-    let output = Command::new("git")
-        .args(&[
-            "-C", &worktree_path,
-            "log",
-            &format!("--max-count={}", limit),
-            "--pretty=format:%H|%h|%s|%an|%ar|%D"
-        ])
-        .output()
-        .map_err(|e| format!("Failed to get git log: {}", e))?;
-
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut commits = Vec::new();
-
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.splitn(6, '|').collect();
-        if parts.len() >= 5 {
-            let refs = parts.get(5).unwrap_or(&"");
-            commits.push(GitCommit {
-                hash: parts[0].to_string(),
-                short_hash: parts[1].to_string(),
-                message: parts[2].to_string(),
-                author: parts[3].to_string(),
-                date: parts[4].to_string(),
-                is_head: refs.contains("HEAD"),
-            });
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
         }
-    }
 
-    Ok(commits)
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut commits = Vec::new();
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.splitn(6, '|').collect();
+            if parts.len() >= 5 {
+                let refs = parts.get(5).unwrap_or(&"");
+                commits.push(GitCommit {
+                    hash: parts[0].to_string(),
+                    short_hash: parts[1].to_string(),
+                    message: parts[2].to_string(),
+                    author: parts[3].to_string(),
+                    date: parts[4].to_string(),
+                    is_head: refs.contains("HEAD"),
+                });
+            }
+        }
+
+        Ok(commits)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
