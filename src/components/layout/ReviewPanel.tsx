@@ -546,19 +546,19 @@ export function ReviewPanel() {
 
         <div className="flex gap-2 pt-1">
           <button
+            onClick={handleCommit}
+            disabled={!commitMessage.trim() || !hasStagedFiles || isLoading}
+            className="flex-1 px-3 py-1.5 bg-[#d97757]/10 hover:bg-[#d97757]/20 border border-[#d97757]/30 text-[#d97757] text-xs transition-colors disabled:opacity-50 text-center"
+          >
+            [ Commit ]
+          </button>
+          <button
             onClick={handlePush}
             disabled={isLoading || isPushing}
             className="flex-1 px-3 py-1.5 bg-[#111111] hover:bg-[#1a1a1a] border border-[#1a1a1a] text-[#9b9b9b] text-xs transition-colors disabled:opacity-50 text-center"
             title="Push commits to remote"
           >
             {isPushing ? '[ Pushing... ]' : '[ Push ]'}
-          </button>
-          <button
-            onClick={handleCommit}
-            disabled={!commitMessage.trim() || !hasStagedFiles || isLoading}
-            className="flex-1 px-3 py-1.5 bg-[#d97757]/10 hover:bg-[#d97757]/20 border border-[#d97757]/30 text-[#d97757] text-xs transition-colors disabled:opacity-50 text-center"
-          >
-            [ Commit ]
           </button>
         </div>
 

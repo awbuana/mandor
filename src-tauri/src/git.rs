@@ -289,12 +289,30 @@ pub async fn git_push(state: State<'_, GitState>, worktree_path: String) -> Resu
     let path = worktree_path.clone();
     tokio::task::spawn_blocking(move || {
         let output = Command::new("git")
-            .args(&["-C", &path, "push"])
+            .args(&["-C", &path, "push", "-u", "origin", "HEAD"])
             .output()
             .map_err(|e| format!("Failed to execute git push: {}", e))?;
 
         if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            if stderr.contains("upstream branch") || stderr.contains("no upstream branch") {
+                let branch_output = Command::new("git")
+                    .args(&["-C", &path, "rev-parse", "--abbrev-ref", "HEAD"])
+                    .output()
+                    .map_err(|e| format!("Failed to get branch name: {}", e))?;
+                if branch_output.status.success() {
+                    let branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+                    let setup_output = Command::new("git")
+                        .args(&["-C", &path, "push", "-u", "origin", &branch])
+                        .output()
+                        .map_err(|e| format!("Failed to execute git push -u: {}", e))?;
+                    if !setup_output.status.success() {
+                        return Err(String::from_utf8_lossy(&setup_output.stderr).to_string());
+                    }
+                    return Ok(());
+                }
+            }
+            return Err(stderr);
         }
 
         Ok(())
