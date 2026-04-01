@@ -2,8 +2,8 @@ import { useAppStore } from '@/stores/appStore';
 import { Worktree } from '@/types';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  Folder, 
+import {
+  Folder,
   Trash,
   ArrowSquareOut,
   Plus,
@@ -41,12 +41,12 @@ export function WorktreeList() {
 
   const handleConfirmDelete = async () => {
     if (!deleteConfirmWorktree) return;
-    
+
     setIsDeleting(true);
     try {
-      await invoke('delete_worktree', { 
+      await invoke('delete_worktree', {
         repoPath: '.',
-        worktreePath: deleteConfirmWorktree.path 
+        worktreePath: deleteConfirmWorktree.path
       });
       setWorktrees(worktrees.filter(w => w.path !== deleteConfirmWorktree.path));
       if (selectedWorktree?.path === deleteConfirmWorktree.path) {
@@ -63,9 +63,9 @@ export function WorktreeList() {
   const handleOpenInEditor = async (worktree: Worktree, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      await invoke('open_in_editor', { 
+      await invoke('open_in_editor', {
         editor: 'vscode',
-        path: worktree.path 
+        path: worktree.path
       });
     } catch (error) {
       console.error('Failed to open in editor:', error);
@@ -84,7 +84,7 @@ export function WorktreeList() {
 
   // Generate default worktree path based on repo name and branch
   const generateWorktreePath = (branch: string) => {
-    const repoName = currentRepoPath 
+    const repoName = currentRepoPath
       ? currentRepoPath.split('/').pop() || 'repo'
       : 'repo';
     // Clean branch name for folder (remove special chars)
@@ -142,22 +142,22 @@ export function WorktreeList() {
               "w-2 h-2 rounded-full flex-shrink-0",
               getStatusColor(worktree)
             )} />
-            
+
             {/* Icon */}
             <Folder className={cn(
               "w-4 h-4 flex-shrink-0",
-              selectedWorktree?.path === worktree.path 
-                ? "text-blue-400" 
+              selectedWorktree?.path === worktree.path
+                ? "text-blue-400"
                 : "text-slate-400"
             )} />
-            
+
             {/* Content */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className={cn(
                   "text-sm font-medium truncate",
-                  selectedWorktree?.path === worktree.path 
-                    ? "text-slate-100" 
+                  selectedWorktree?.path === worktree.path
+                    ? "text-slate-100"
                     : "text-slate-300"
                 )}>
                   {getBranchName(worktree)}
@@ -198,7 +198,7 @@ export function WorktreeList() {
           </div>
         </motion.div>
       ))}
-      
+
       {/* Add Worktree Button */}
       <motion.button
         initial={{ opacity: 0 }}
@@ -239,7 +239,7 @@ export function WorktreeList() {
                   </p>
                 </div>
               </div>
-              
+
               <p className="text-sm text-slate-300 mb-6">
                 Are you sure you want to delete this worktree? This action cannot be undone.
               </p>

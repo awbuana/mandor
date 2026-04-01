@@ -31,13 +31,13 @@ export function FileDiffViewer({ filePath, isOpen, onClose }: FileDiffViewerProp
   const loadDiff = async (path: string) => {
     if (!selectedWorktree) return
     setLoading(true)
-    
+
     try {
-      const diff: string = await invoke('get_diff', { 
+      const diff: string = await invoke('get_diff', {
         worktreePath: selectedWorktree.path,
         filePath: path
       })
-      
+
       const lines = parseDiff(diff)
       setDiffContent(lines)
     } catch (error) {
@@ -138,7 +138,7 @@ export function FileDiffViewer({ filePath, isOpen, onClose }: FileDiffViewerProp
                   M
                 </span>
               </div>
-              
+
               <div className="flex items-center gap-4">
                 {/* Change stats */}
                 <div className="flex items-center gap-3 text-xs">
@@ -151,7 +151,7 @@ export function FileDiffViewer({ filePath, isOpen, onClose }: FileDiffViewerProp
                     {removedCount}
                   </span>
                 </div>
-                
+
                 <button
                   onClick={onClose}
                   className="p-1.5 hover:bg-[#2a2a2a] rounded text-[#6b6b6b] hover:text-[#9b9b9b] transition-colors"
@@ -190,7 +190,7 @@ export function FileDiffViewer({ filePath, isOpen, onClose }: FileDiffViewerProp
                           {line.newLine || ''}
                         </span>
                       </div>
-                      
+
                       {/* Content */}
                       <div className={`
                         flex-1 py-0.5 pl-3 pr-4 whitespace-pre

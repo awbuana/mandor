@@ -32,13 +32,13 @@ export function DiffViewer() {
   const loadDiff = async (filePath: string) => {
     if (!selectedWorktree) return;
     setLoading(true);
-    
+
     try {
-      const diff: string = await invoke('get_diff', { 
+      const diff: string = await invoke('get_diff', {
         worktreePath: selectedWorktree.path,
-        filePath 
+        filePath
       });
-      
+
       const lines = parseDiff(diff);
       setDiffContent(lines);
     } catch (error) {
@@ -157,7 +157,7 @@ export function DiffViewer() {
                       {line.newLine || ''}
                     </span>
                   </div>
-                  
+
                   {/* Content */}
                   <span className={cn(
                     "flex-1 whitespace-pre",

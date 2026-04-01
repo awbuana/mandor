@@ -1,16 +1,12 @@
 import { useAppStore } from '@/stores/appStore'
 import { motion, AnimatePresence } from 'framer-motion'
-import { 
-  GitBranch,
-  FileCode,
-  Folder,
+import {
   GitCommit as GitCommitIcon
 } from '@phosphor-icons/react'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { FileStatus, FileComment, GitCommit as GitCommitType } from '@/types'
 import { cn } from '@/lib/utils'
-
 
 interface FileChange {
   id: string
@@ -88,7 +84,7 @@ function buildFileTree(files: { path: string; status: FileChange['status']; file
     if (item.type === 'file') {
       return { added: item.added, removed: item.removed }
     }
-    
+
     let added = 0
     let removed = 0
     if (item.children) {
@@ -111,7 +107,7 @@ function buildFileTree(files: { path: string; status: FileChange['status']; file
 }
 
 export function ReviewPanel() {
-  const { selectedWorktree, worktreeStatus, setWorktreeStatus, openFile, getAllComments, resolveComment, removeComment, getOpencodeServer, addAgentMessage, setAgentIsSending } = useAppStore()
+  const { selectedWorktree, worktreeStatus, setWorktreeStatus, openFile, getAllComments, resolveComment, removeComment, getOpencodeServer, setActiveView } = useAppStore()
   const [commitMessage, setCommitMessage] = useState('')
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [isLoading, setIsLoading] = useState(false)
@@ -119,9 +115,10 @@ export function ReviewPanel() {
   const [commentsExpanded, setCommentsExpanded] = useState(true)
   const [stagedExpanded, setStagedExpanded] = useState(true)
   const [changesExpanded, setChangesExpanded] = useState(true)
-  const [implementingFile, setImplementingFile] = useState<string | null>(null)
+  const [isPushing, setIsPushing] = useState(false)
   const [gitLog, setGitLog] = useState<GitCommitType[]>([])
   const [gitLogExpanded, setGitLogExpanded] = useState(true)
+  const [implementWarning, setImplementWarning] = useState(false)
 
   // Load worktree status and git log when selected worktree changes
   useEffect(() => {
@@ -146,13 +143,13 @@ export function ReviewPanel() {
 
   const loadWorktreeStatus = async () => {
     if (!selectedWorktree) return
-    
+
     setIsLoading(true)
     setError(null)
-    
+
     try {
-      const status = await invoke('get_worktree_status', { 
-        worktreePath: selectedWorktree.path 
+      const status = await invoke('get_worktree_status', {
+        worktreePath: selectedWorktree.path
       })
       setWorktreeStatus(selectedWorktree.path, status as any)
     } catch (err) {
@@ -186,8 +183,11 @@ export function ReviewPanel() {
 
   // Auto-expand folders
   useEffect(() => {
+    // Only auto-expand when we first load the trees, to not fight user interactions
+    if (expandedFolders.size > 0) return;
+
     const foldersToExpand = new Set<string>()
-    
+
     const collectFolders = (items: FileChange[], parentPath = '') => {
       for (const item of items) {
         const fullPath = parentPath ? `${parentPath}/${item.path}` : item.path
@@ -199,7 +199,7 @@ export function ReviewPanel() {
         }
       }
     }
-    
+
     collectFolders(stagedTree)
     collectFolders(changesTree)
     setExpandedFolders(foldersToExpand)
@@ -237,32 +237,31 @@ export function ReviewPanel() {
 
   const handleStageAll = async () => {
     if (!selectedWorktree || !status) return
+    setIsLoading(true)
     try {
-      const allFiles = [...status.modified, ...status.untracked.map(p => ({ path: p, status: '?', staged: false }))]
-      for (const file of allFiles) {
-        await invoke('stage_file', { worktreePath: selectedWorktree.path, filePath: file.path })
-      }
+      await invoke('stage_all_files', { worktreePath: selectedWorktree.path })
       await loadWorktreeStatus()
     } catch (err) {
       console.error('Failed to stage all files:', err)
+      setIsLoading(false)
     }
   }
 
   const handleUnstageAll = async () => {
     if (!selectedWorktree || !status) return
+    setIsLoading(true)
     try {
-      for (const file of status.staged) {
-        await invoke('unstage_file', { worktreePath: selectedWorktree.path, filePath: file.path })
-      }
+      await invoke('unstage_all_files', { worktreePath: selectedWorktree.path })
       await loadWorktreeStatus()
     } catch (err) {
       console.error('Failed to unstage all files:', err)
+      setIsLoading(false)
     }
   }
 
   const handleCommit = async () => {
     if (!selectedWorktree || !commitMessage.trim()) return
-    
+
     try {
       await invoke('commit', {
         worktreePath: selectedWorktree.path,
@@ -285,79 +284,71 @@ export function ReviewPanel() {
     }
   }
 
-  const getStatusIndicator = (statusType: FileChange['status']) => {
-    switch (statusType) {
-      case 'added':
-        return <span className="text-[#4ade80] text-[8px]">[+]</span>
-      case 'removed':
-        return <span className="text-[#f87171] text-[8px]">[−]</span>
-      case 'untracked':
-        return <span className="text-[#6a9bcc] text-[8px]">[?]</span>
-      default:
-        return <span className="text-[#d97757] text-[8px]">[M]</span>
+  const handlePush = async () => {    if (!selectedWorktree) return
+    setIsPushing(true)
+    setError(null)
+
+    try {
+      await invoke('git_push', {
+        worktreePath: selectedWorktree.path,
+      })
+      // Could show a success toast here
+    } catch (err) {
+      console.error('Failed to push:', err)
+      let errorMessage = 'Failed to push commits'
+      if (err instanceof Error) {
+        errorMessage = err.message
+      } else if (typeof err === 'string') {
+        errorMessage = err
+      } else if (typeof err === 'object' && err !== null) {
+        errorMessage = (err as { message?: string }).message || JSON.stringify(err)
+      }
+      setError(errorMessage)
+    } finally {
+      setIsPushing(false)
     }
   }
 
-  /**
-   * Sends unresolved comments to the opencode agent to implement feedback.
-   * Constructs a prompt from user comments and sends it as a chat message.
-   */
-  const handleImplementFeedback = async (filePath: string, comments: FileComment[]) => {
+  // Send a comment as a prompt to the running opencode TUI
+  const handleImplement = async (comment: FileComment, filePath: string) => {
     if (!selectedWorktree) return
-
     const server = getOpencodeServer(selectedWorktree.path)
-    if (!server?.isRunning || !server.sessionId) {
-      console.error('Opencode server not running')
+    if (!server?.isRunning) {
+      setImplementWarning(true)
+      setTimeout(() => setImplementWarning(false), 4000)
       return
     }
 
-    setImplementingFile(filePath)
-
-    // Build the prompt with all comments for this file
-    const unresolvedComments = comments.filter(c => !c.resolved && c.author === 'user')
-    if (unresolvedComments.length === 0) {
-      setImplementingFile(null)
-      return
-    }
-
-    // TODO: Improve this prompt to include more context (e.g., file content, surrounding code)
-    const promptLines = [
-      `Please implement the following feedback for file: ${filePath}`,
-      '',
-      ...unresolvedComments.map((comment, idx) => {
-        const lineInfo = comment.lineNumber ? ` (Line ${comment.lineNumber})` : ''
-        return `${idx + 1}.${lineInfo} ${comment.content}`
-      }),
-      '',
-      'Please make the necessary changes to address all these comments.'
-    ]
-
-    const prompt = promptLines.join('\n')
-
-    // Add user message to the chat
-    const userMessage = {
-      id: Date.now().toString(),
-      role: 'user' as const,
-      content: prompt,
-      timestamp: new Date()
-    }
-
-    addAgentMessage(selectedWorktree.path, userMessage)
-    setAgentIsSending(selectedWorktree.path, true)
+    const lineRef = comment.lineNumber ? `:${comment.lineNumber}` : ''
+    const prompt = `Address this feedback in ${filePath}${lineRef}:\n\n${comment.content}`
 
     try {
-      await invoke('send_opencode_message_async', {
+      await invoke('tui_append_prompt', {
         hostname: server.hostname,
         port: server.port,
-        sessionId: server.sessionId,
-        message: prompt,
-        providerId: null,
-        modelId: null,
+        text: prompt,
       })
-    } catch (error) {
-      console.error('Failed to send implementation request:', error)
-    } finally {
-      setImplementingFile(null)
+      await invoke('tui_submit_prompt', {
+        hostname: server.hostname,
+        port: server.port,
+      })
+      // Switch to TUI tab so the user sees the prompt land
+      setActiveView('tui')
+    } catch (err) {
+      console.error('[ReviewPanel] handleImplement failed:', err)
+    }
+  }
+
+  const getStatusIndicator = (statusType: FileChange['status']) => {
+    switch (statusType) {
+      case 'added':
+        return <span className="text-[#4ade80] font-bold text-[10px]">A</span>
+      case 'removed':
+        return <span className="text-[#f87171] font-bold text-[10px]">D</span>
+      case 'untracked':
+        return <span className="text-[#6a9bcc] font-bold text-[10px]">U</span>
+      default:
+        return <span className="text-[#d97757] font-bold text-[10px]">M</span>
     }
   }
 
@@ -366,27 +357,40 @@ export function ReviewPanel() {
     const isFolder = item.type === 'folder'
     const isExpanded = expandedFolders.has(fullPath)
 
+    // Calculate TUI-style indentation with subtle guide lines
+    const indentGuides = Array.from({ length: depth }).map((_, i) => (
+      <div key={i} className="w-[12px] h-full border-l border-[#1f1f1f] absolute" style={{ left: `${16 + i * 12}px` }} />
+    ))
+
     if (isFolder) {
       return (
-        <div key={fullPath}>
+        <div key={fullPath} className="relative">
+          {indentGuides}
           <button
             onClick={() => toggleFolder(fullPath)}
-            className="w-full flex items-center gap-1.5 py-1 hover:bg-[#111111] transition-colors group"
-            style={{ paddingLeft: `${12 + depth * 8}px` }}
+            className="w-full flex items-center gap-2 py-1.5 hover:bg-[#111] transition-colors group relative z-10"
+            style={{ paddingLeft: `${12 + depth * 12}px` }}
           >
-            <span className="text-[#5b5b5b] text-[10px] font-mono">
-              {isExpanded ? '[−]' : '[+]'}
+            <span className={cn(
+              "text-[9px] font-mono w-3 flex justify-center",
+              isExpanded ? "text-[#a0a0a0]" : "text-[#6b6b6b]"
+            )}>
+              {isExpanded ? '▾' : '▸'}
             </span>
-            <Folder className="w-3 h-3 text-[#6a9bcc]" />
-            <span className="flex-1 text-left text-[10px] text-[#9b9b9b] truncate font-mono">{item.path}</span>
+            <span className={cn(
+              "flex-1 text-left text-[10px] truncate font-mono tracking-tight",
+              isExpanded ? "text-[#c0c0c0]" : "text-[#8b8b8b]"
+            )}>
+              {item.path}
+            </span>
             {(item.added > 0 || item.removed > 0) && (
-              <div className="flex items-center gap-1 text-[9px] font-mono">
+              <div className="flex items-center gap-1.5 text-[9px] font-mono opacity-80 pr-3">
                 {item.added > 0 && <span className="text-[#4ade80]">+{item.added}</span>}
-                {item.removed > 0 && <span className="text-[#f87171]">−{item.removed}</span>}
+                {item.removed > 0 && <span className="text-[#f87171]">-{item.removed}</span>}
               </div>
             )}
           </button>
-          
+
           {isExpanded && item.children?.map(child => renderFileChange(child, depth + 1, fullPath, isStaged))}
         </div>
       )
@@ -401,32 +405,43 @@ export function ReviewPanel() {
     return (
       <div
         key={fullPath}
-        className="group flex items-center gap-1.5 py-1 hover:bg-[#111111] transition-colors"
-        style={{ paddingLeft: `${12 + depth * 8}px` }}
+        className="group flex items-center py-1 hover:bg-[#111] transition-colors relative cursor-pointer"
+        style={{ paddingLeft: `${12 + depth * 12}px` }}
+        onClick={handleFileClick}
       >
-        {/* Stage/Unstage Button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            isStaged ? handleUnstage(fullPath) : handleStage(fullPath)
-          }}
-          className="opacity-0 group-hover:opacity-100 text-[9px] font-mono transition-all"
-          title={isStaged ? 'Unstage file' : 'Stage file'}
-        >
-          {isStaged ? (
-            <span className="text-[#f87171]">[−]</span>
-          ) : (
-            <span className="text-[#4ade80]">[+]</span>
-          )}
-        </button>
+        {indentGuides}
 
-        <div
-          onClick={handleFileClick}
-          className="flex-1 flex items-center gap-1.5 cursor-pointer"
-        >
-          {getStatusIndicator(item.status)}
-          <FileCode className="w-3 h-3 text-[#6b6b6b]" />
-          <span className="text-[10px] text-[#a0a0a0] truncate font-mono">{item.path}</span>
+        {/* State icon / Button wrapper */}
+        <div className="w-5 flex items-center justify-center relative z-10 mr-1">
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              isStaged ? handleUnstage(fullPath) : handleStage(fullPath)
+            }}
+            className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-[#111] text-[10px] font-mono transition-opacity z-20"
+            title={isStaged ? 'Unstage file' : 'Stage file'}
+          >
+            {isStaged ? (
+              <span className="text-[#f87171] hover:text-[#ff9999] hover:scale-110 transition-transform">−</span>
+            ) : (
+              <span className="text-[#4ade80] hover:text-[#77f797] hover:scale-110 transition-transform">+</span>
+            )}
+          </button>
+          <span className="group-hover:opacity-0 transition-opacity flex items-center justify-center z-10 absolute inset-0">
+            {getStatusIndicator(item.status)}
+          </span>
+        </div>
+
+        <div className="flex-1 flex items-center gap-2 relative z-10 min-w-0 pr-3">
+          <span className={cn(
+            "text-[10px] truncate font-mono tracking-tight",
+            isStaged ? "text-[#a0a0a0]" : "text-[#8b8b8b]",
+            item.status === 'added' && "text-[#4ade80]/90",
+            item.status === 'removed' && "text-[#f87171]/90",
+            item.status === 'untracked' && "text-[#6a9bcc]/90"
+          )}>
+            {item.path}
+          </span>
         </div>
       </div>
     )
@@ -439,14 +454,16 @@ export function ReviewPanel() {
 
   if (!selectedWorktree) {
     return (
-      <div className="w-80 h-full bg-[#0a0a0a] flex flex-col font-mono">
-        <div className="h-10 flex items-center justify-between px-3 border-b border-[#1a1a1a]">
-          <span className="text-[11px] text-[#6b6b6b] uppercase tracking-wider">Source Control</span>
-          <GitBranch className="w-3.5 h-3.5 text-[#5b5b5b]" />
+      <div className="w-80 h-full bg-[#0a0a0a] flex flex-col font-mono border-l border-[#1a1a1a]">
+        <div className="h-10 flex items-center justify-between px-3 py-2 bg-[#111111] border-b border-[#1a1a1a]">
+          <div className="flex items-center gap-2">
+            <span className="text-[#d97757]">⌥</span>
+            <span className="text-xs text-[#6b6b6b] uppercase tracking-wider">source_control</span>
+          </div>
         </div>
-        <div className="flex-1 flex flex-col items-center justify-center text-[#5b5b5b]">
-          <GitCommitIcon className="w-10 h-10 mb-2 opacity-30" />
-          <p className="text-[10px] font-mono">// select a worktree</p>
+        <div className="flex-1 flex flex-col items-center justify-center text-[#3a3a3a]">
+          <GitCommitIcon className="w-8 h-8 mb-3 opacity-20" />
+          <p className="text-[10px] font-mono italic">~ no worktree selected</p>
         </div>
       </div>
     )
@@ -457,73 +474,90 @@ export function ReviewPanel() {
       initial={{ x: 20, opacity: 0 }}
       animate={{ x: 0, opacity: 1 }}
       transition={{ duration: 0.3, delay: 0.2 }}
-      className="w-80 h-full bg-[#0a0a0a] flex flex-col font-mono"
+      className="w-80 h-full bg-[#0a0a0a] flex flex-col font-mono border-l border-[#1a1a1a]"
     >
       {/* Header */}
-      <div className="h-10 flex items-center justify-between px-3 border-b border-[#1a1a1a]">
-        <span className="text-[11px] text-[#9b9b9b] uppercase tracking-wider">Source Control</span>
-        <div className="flex items-center gap-1.5 text-[#6b6b6b]">
-          <GitBranch className="w-3.5 h-3.5" />
-          <span className="text-[10px] font-mono">{status?.commit.slice(0, 7) || '...'}</span>
+      <div className="h-10 flex items-center justify-between px-3 py-2 bg-[#111111] border-b border-[#1a1a1a]">
+        <div className="flex items-center gap-2">
+          <span className="text-[#d97757]">⌥</span>
+          <span className="text-xs text-[#6b6b6b] uppercase tracking-wider">source_control</span>
         </div>
+        <span className="text-xs text-[#6b6b6b]">[{status?.commit.slice(0, 7) || '.......'}]</span>
       </div>
 
       {/* Commit Section */}
-      <div className="p-2.5 space-y-2 border-b border-[#1a1a1a]">
-        <input
-          type="text"
-          value={commitMessage}
-          onChange={(e) => setCommitMessage(e.target.value)}
-          placeholder={`> commit message (⌘Enter)`}
-          className="w-full px-2 py-1.5 bg-[#111111] border border-[#2a2a2a] text-[10px] text-[#e0e0e0] placeholder-[#5b5b5b] outline-none focus:border-[#3a3a3a] font-mono"
-        />
-        
-        <button
-          onClick={handleCommit}
-          disabled={!commitMessage.trim() || !hasStagedFiles || isLoading}
-          className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-[#1a4a8a]/80 hover:bg-[#2a5a9a] disabled:opacity-50 disabled:cursor-not-allowed text-[10px] text-white transition-colors font-mono"
-        >
-          <span>[</span>
-          <span>COMMIT</span>
-          <span>]</span>
-          {stagedCount > 0 && (
-            <span className="text-[9px] text-white/60">({stagedCount})</span>
-          )}
-        </button>
+      <div className="p-3 space-y-3 border-b border-[#1a1a1a] bg-[#0a0a0a]">
+        <div className="relative group">
+          <div className="absolute left-2.5 top-[9px] text-[#5b5b5b] font-mono text-[10px] group-focus-within:text-[#4ade80] transition-colors pointer-events-none">
+            $
+          </div>
+          <textarea
+            value={commitMessage}
+            onChange={(e) => setCommitMessage(e.target.value)}
+            placeholder="commit message..."
+            rows={2}
+            className="w-full pl-6 pr-3 py-2 bg-[#111111] border border-[#1a1a1a] group-focus-within:border-[#d97757]/50 text-xs text-[#e0e0e0] placeholder-[#5b5b5b] outline-none font-mono resize-none transition-colors"
+          />
+        </div>
+
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={handlePush}
+            disabled={isLoading || isPushing}
+            className="flex-1 px-3 py-1.5 bg-[#111111] hover:bg-[#1a1a1a] border border-[#1a1a1a] text-[#9b9b9b] text-xs transition-colors disabled:opacity-50 text-center"
+            title="Push commits to remote"
+          >
+            {isPushing ? '[ Pushing... ]' : '[ Push ]'}
+          </button>
+          <button
+            onClick={handleCommit}
+            disabled={!commitMessage.trim() || !hasStagedFiles || isLoading}
+            className="flex-1 px-3 py-1.5 bg-[#d97757]/10 hover:bg-[#d97757]/20 border border-[#d97757]/30 text-[#d97757] text-xs transition-colors disabled:opacity-50 text-center"
+          >
+            [ Commit ]
+          </button>
+        </div>
 
         {error && (
-          <p className="text-[9px] text-[#f87171] font-mono">// {error}</p>
+          <div className="border-l-2 border-[#f87171] pl-3 py-1 mt-2">
+            <p className="text-xs text-[#f87171]">{error}</p>
+          </div>
         )}
       </div>
 
+      {/* Scrollable sections container */}
+      <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
+
       {/* Staged Changes Section */}
-      <div className="border-b border-[#1a1a1a]">
-        <button
-          onClick={() => setStagedExpanded(!stagedExpanded)}
-          className="w-full flex items-center justify-between px-2.5 py-1.5 hover:bg-[#111111] transition-colors"
-        >
-          <div className="flex items-center gap-1.5">
-            <span className="text-[#5b5b5b] text-[9px] font-mono">
-              {stagedExpanded ? '[−]' : '[+]'}
-            </span>
-            <span className="text-[10px] text-[#9b9b9b] font-mono uppercase">STAGED</span>
-            {stagedCount > 0 && (
-              <span className="text-[9px] text-[#5b5b5b] font-mono">({stagedCount})</span>
-            )}
-          </div>
+      <div className="flex flex-col">
+        <div className="sticky top-0 z-10 bg-[#0a0a0a]">
+          <button
+            onClick={() => setStagedExpanded(!stagedExpanded)}
+            className="w-full flex items-center justify-between px-4 py-2 hover:bg-[#111] transition-colors border-b border-[#1a1a1a] group font-mono"
+          >
+            <div className="flex items-center gap-2 text-xs text-[#6b6b6b]">
+              <span>[{stagedExpanded ? '-' : '+'}]</span>
+              <span className={stagedExpanded ? "text-[#e0e0e0]" : ""}>STAGED</span>
+              {stagedCount > 0 && (
+                <span className="text-[#4ade80]">({stagedCount})</span>
+              )}
+            </div>
+          </button>
           {stagedCount > 0 && (
-            <span
-              onClick={(e) => {
-                e.stopPropagation()
-                handleUnstageAll()
-              }}
-              className="text-[9px] text-[#6b6b6b] hover:text-[#9b9b9b] font-mono transition-colors cursor-pointer"
-              title="Unstage all"
-            >
-              [−ALL]
-            </span>
+            <div className="absolute right-4 top-0 bottom-0 flex items-center font-mono">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleUnstageAll()
+                }}
+                className="text-xs text-[#5b5b5b] hover:text-[#f87171] transition-colors"
+                title="Unstage all"
+              >
+                [-all]
+              </button>
+            </div>
           )}
-        </button>
+        </div>
 
         <AnimatePresence>
           {stagedExpanded && (
@@ -539,11 +573,11 @@ export function ReviewPanel() {
                   <span className="text-[10px] font-mono animate-pulse">loading...</span>
                 </div>
               ) : !hasStagedFiles ? (
-                <div className="px-2.5 py-2 text-[9px] text-[#5b5b5b] font-mono">
-                  // no staged changes
+                <div className="px-6 py-3 text-[10px] text-[#5b5b5b] font-mono italic">
+                  // empty
                 </div>
               ) : (
-                <div className="py-0.5">
+                <div className="py-2">
                   {stagedTree.map(item => renderFileChange(item, 0, '', true))}
                 </div>
               )}
@@ -553,33 +587,35 @@ export function ReviewPanel() {
       </div>
 
       {/* Changes Section (Unstaged) */}
-      <div className="flex-1 overflow-auto">
-        <button
-          onClick={() => setChangesExpanded(!changesExpanded)}
-          className="w-full flex items-center justify-between px-2.5 py-1.5 hover:bg-[#111111] transition-colors border-b border-[#1a1a1a]"
-        >
-          <div className="flex items-center gap-1.5">
-            <span className="text-[#5b5b5b] text-[9px] font-mono">
-              {changesExpanded ? '[−]' : '[+]'}
-            </span>
-            <span className="text-[10px] text-[#9b9b9b] font-mono uppercase">CHANGES</span>
-            {changesCount > 0 && (
-              <span className="text-[9px] text-[#5b5b5b] font-mono">({changesCount})</span>
-            )}
-          </div>
+      <div className="flex flex-col border-t border-[#1a1a1a]">
+        <div className="sticky top-0 z-10 bg-[#0a0a0a]">
+          <button
+            onClick={() => setChangesExpanded(!changesExpanded)}
+            className="w-full flex items-center justify-between px-4 py-2 hover:bg-[#111] transition-colors border-b border-[#1a1a1a] group font-mono"
+          >
+            <div className="flex items-center gap-2 text-xs text-[#6b6b6b]">
+              <span>[{changesExpanded ? '-' : '+'}]</span>
+              <span className={changesExpanded ? "text-[#e0e0e0]" : ""}>CHANGES</span>
+              {changesCount > 0 && (
+                <span className="text-[#6a9bcc]">({changesCount})</span>
+              )}
+            </div>
+          </button>
           {changesCount > 0 && (
-            <span
-              onClick={(e) => {
-                e.stopPropagation()
-                handleStageAll()
-              }}
-              className="text-[9px] text-[#6b6b6b] hover:text-[#9b9b9b] font-mono transition-colors cursor-pointer"
-              title="Stage all"
-            >
-              [+ALL]
-            </span>
+            <div className="absolute right-4 top-0 bottom-0 flex items-center font-mono">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleStageAll()
+                }}
+                className="text-xs text-[#5b5b5b] hover:text-[#4ade80] transition-colors"
+                title="Stage all"
+              >
+                [+all]
+              </button>
+            </div>
           )}
-        </button>
+        </div>
 
         <AnimatePresence>
           {changesExpanded && (
@@ -595,11 +631,11 @@ export function ReviewPanel() {
                   <span className="text-[10px] font-mono animate-pulse">loading...</span>
                 </div>
               ) : !hasChanges ? (
-                <div className="px-2.5 py-2 text-[9px] text-[#5b5b5b] font-mono">
-                  // no changes
+                <div className="px-6 py-3 text-[10px] text-[#5b5b5b] font-mono italic">
+                  // working tree clean
                 </div>
               ) : (
-                <div className="py-0.5">
+                <div className="py-2">
                   {changesTree.map(item => renderFileChange(item, 0, '', false))}
                 </div>
               )}
@@ -610,27 +646,25 @@ export function ReviewPanel() {
 
       {/* Comments Section */}
       {selectedWorktree && (
-        <div className="border-t border-[#1a1a1a]">
-          <button
-            onClick={() => setCommentsExpanded(!commentsExpanded)}
-            className="w-full flex items-center justify-between px-2.5 py-1.5 hover:bg-[#111111] transition-colors"
-          >
-            <div className="flex items-center gap-1.5">
-              <span className="text-[#5b5b5b] text-[9px] font-mono">
-                {commentsExpanded ? '[−]' : '[+]'}
-              </span>
-              <span className="text-[10px] text-[#9b9b9b] font-mono uppercase">COMMENTS</span>
-              {(() => {
-                const allComments = getAllComments(selectedWorktree.path)
-                const unresolvedCount = allComments.filter(c => !c.resolved).length
-                return unresolvedCount > 0 && (
-                  <span className="text-[9px] text-[#d97757] font-mono">
-                    ({unresolvedCount})
-                  </span>
-                )
-              })()}
-            </div>
-          </button>
+        <div className="flex flex-col border-t border-[#1a1a1a]">
+          <div className="sticky top-0 z-10 bg-[#0a0a0a]">
+            <button
+              onClick={() => setCommentsExpanded(!commentsExpanded)}
+              className="w-full flex items-center justify-between px-4 py-2 hover:bg-[#111] transition-colors border-b border-[#1a1a1a] group font-mono"
+            >
+              <div className="flex items-center gap-2 text-xs text-[#6b6b6b]">
+                <span>[{commentsExpanded ? '-' : '+'}]</span>
+                <span className={commentsExpanded ? "text-[#e0e0e0]" : ""}>COMMENTS</span>
+                {(() => {
+                  const allComments = getAllComments(selectedWorktree.path)
+                  const unresolvedCount = allComments.filter(c => !c.resolved).length
+                  return unresolvedCount > 0 && (
+                    <span className="text-[#d97757]">({unresolvedCount})</span>
+                  )
+                })()}
+              </div>
+            </button>
+          </div>
 
           <AnimatePresence>
             {commentsExpanded && selectedWorktree && (
@@ -641,12 +675,29 @@ export function ReviewPanel() {
                 transition={{ duration: 0.2 }}
                 className="overflow-hidden"
               >
-                <div className="px-2 pb-2 max-h-48 overflow-y-auto">
+                <AnimatePresence>
+                  {implementWarning && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.15 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="mx-4 mt-2 px-2 py-1.5 border-l-2 border-[#d97757] text-xs text-[#d97757] font-mono">
+                        Start OpenCode first from the TUI tab
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                <div className="px-4 py-2">
                   {(() => {
                     const allComments = getAllComments(selectedWorktree.path)
                     if (allComments.length === 0) {
                       return (
-                        <p className="text-[9px] text-[#5b5b5b] py-1.5 font-mono">// no comments</p>
+                        <div className="px-2 py-1 text-[10px] text-[#5b5b5b] font-mono italic">
+                          // empty
+                        </div>
                       )
                     }
 
@@ -659,84 +710,75 @@ export function ReviewPanel() {
                       return acc
                     }, {} as Record<string, FileComment[]>)
 
-                    return Object.entries(commentsByFile).map(([filePath, comments]) => {
-                      const userComments = comments.filter(c => !c.resolved && c.author === 'user')
-                      const hasUserComments = userComments.length > 0
+                      return Object.entries(commentsByFile).map(([filePath, comments]) => {
 
                       return (
-                      <div key={filePath} className="mb-2">
+                      <div key={filePath} className="mb-3">
                         {/* File path header */}
-                        <div className="flex items-center gap-1 mb-1">
-                          <span className="text-[#3a3a3a] text-[9px]">├</span>
+                        <div className="flex items-center gap-1 mb-1.5">
+                          <span className="text-[#3a3a3a] text-xs">├</span>
                           <button
                             onClick={() => openFile(selectedWorktree.path, filePath)}
-                            className="text-[9px] text-[#6a9bcc] hover:text-[#8ab8dd] truncate text-left font-mono hover:underline"
+                            className="text-xs text-[#6a9bcc] hover:text-[#8ab8dd] truncate text-left font-mono hover:underline"
                           >
                             {filePath}
                           </button>
-                          {hasUserComments && (
-                            <button
-                              onClick={() => handleImplementFeedback(filePath, comments)}
-                              disabled={implementingFile === filePath}
-                              className={cn(
-                                'ml-auto text-[8px] font-mono transition-colors',
-                                implementingFile === filePath
-                                  ? 'text-[#5b5b5b] cursor-wait'
-                                  : 'text-[#d97757] hover:text-[#f99777]'
-                              )}
-                            >
-                              {implementingFile === filePath ? '[...]' : `[IMPLEMENT(${userComments.length})]`}
-                            </button>
-                          )}
                         </div>
-                        
+
                         {/* Comments list */}
-                        <div className="space-y-1 pl-2 border-l border-[#2a2a2a] ml-1">
+                        <div className="space-y-1.5 pl-3 border-l border-[#2a2a2a] ml-1">
                           {comments.filter(c => !c.resolved).map((comment) => (
                             <div
                               key={comment.id}
                               className={cn(
-                                'group text-[9px] py-1 px-1.5',
+                                'group text-xs py-1.5 px-2 bg-[#111111]',
                                 'border-l-2',
                                 comment.author === 'user'
-                                  ? 'bg-[#1a1512] border-l-[#d97757]'
-                                  : 'bg-[#12151a] border-l-[#6a9bcc]'
+                                  ? 'border-l-[#d97757]'
+                                  : 'border-l-[#6a9bcc]'
                               )}
                             >
-                              <div className="flex items-center gap-1">
+                              <div className="flex items-center gap-2 mb-1">
                                 <span className={cn(
-                                  'font-mono text-[8px] uppercase',
+                                  'font-mono text-[10px] uppercase',
                                   comment.author === 'user' ? 'text-[#d97757]' : 'text-[#6a9bcc]'
                                 )}>
                                   {comment.author === 'user' ? 'YOU' : 'AGENT'}
                                 </span>
                                 {comment.lineNumber && (
-                                  <span className="text-[8px] font-mono text-[#4a4a4a]">
+                                  <span className="text-[10px] font-mono text-[#5b5b5b]">
                                     :{comment.lineNumber}
                                   </span>
                                 )}
-                                <span className="text-[8px] font-mono text-[#3a3a3a] ml-auto">
-                                  {new Date(comment.timestamp).toLocaleDateString('en-GB', { 
-                                    day: '2-digit', 
+                                <span className="text-[10px] font-mono text-[#4a4a4a] ml-auto">
+                                  {new Date(comment.timestamp).toLocaleDateString('en-GB', {
+                                    day: '2-digit',
                                     month: '2-digit'
                                   })}
                                 </span>
                                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                   <button
+                                    onClick={() => handleImplement(comment, filePath)}
+                                    className="text-[#6a9bcc] hover:text-[#8ab8dd] text-[10px] font-mono"
+                                    title="Send to TUI as prompt"
+                                  >
+                                    [→]
+                                  </button>
+                                  <button
                                     onClick={() => resolveComment(selectedWorktree.path, filePath, comment.id)}
-                                    className="text-[#57d977] hover:text-[#77f797] text-[8px] font-mono"
+                                    className="text-[#4ade80] hover:text-[#77f797] text-[10px] font-mono"
                                   >
                                     [✓]
                                   </button>
                                   <button
                                     onClick={() => removeComment(selectedWorktree.path, filePath, comment.id)}
-                                    className="text-[#d97757] hover:text-[#f99777] text-[8px] font-mono"
+                                    className="text-[#d97757] hover:text-[#f99777] text-[10px] font-mono"
                                   >
-                                    [✕]
+                                    [x]
                                   </button>
                                 </div>
                               </div>
-                              <p className="text-[#a0a0a0] text-[9px] leading-tight truncate font-mono mt-0.5">
+                              <p className="text-[#a0a0a0] text-xs leading-relaxed font-mono">
                                 {comment.content}
                               </p>
                             </div>
@@ -754,18 +796,18 @@ export function ReviewPanel() {
 
       {/* Git Log Section */}
       {selectedWorktree && (
-        <div className="border-t border-[#1a1a1a]">
-          <button
-            onClick={() => setGitLogExpanded(!gitLogExpanded)}
-            className="w-full flex items-center justify-between px-2.5 py-1.5 hover:bg-[#111111] transition-colors"
-          >
-            <div className="flex items-center gap-1.5">
-              <span className="text-[#5b5b5b] text-[9px] font-mono">
-                {gitLogExpanded ? '[−]' : '[+]'}
-              </span>
-              <span className="text-[10px] text-[#9b9b9b] font-mono uppercase">HISTORY</span>
-            </div>
-          </button>
+        <div className="flex flex-col border-t border-[#1a1a1a]">
+          <div className="sticky top-0 z-10 bg-[#0a0a0a]">
+            <button
+              onClick={() => setGitLogExpanded(!gitLogExpanded)}
+              className="w-full flex items-center justify-between px-4 py-2 hover:bg-[#111] transition-colors border-b border-[#1a1a1a] group font-mono"
+            >
+              <div className="flex items-center gap-2 text-xs text-[#6b6b6b]">
+                <span>[{gitLogExpanded ? '-' : '+'}]</span>
+                <span className={gitLogExpanded ? "text-[#e0e0e0]" : ""}>HISTORY</span>
+              </div>
+            </button>
+          </div>
 
           <AnimatePresence>
             {gitLogExpanded && (
@@ -776,35 +818,38 @@ export function ReviewPanel() {
                 transition={{ duration: 0.2 }}
                 className="overflow-hidden"
               >
-                <div className="py-0.5 max-h-40 overflow-y-auto">
+                <div className="py-2">
                   {gitLog.length === 0 ? (
-                    <div className="px-2.5 py-2 text-[9px] text-[#5b5b5b] font-mono">
-                      // no history
+                    <div className="px-6 py-1 text-[10px] text-[#5b5b5b] font-mono italic">
+                      // empty
                     </div>
                   ) : (
                     gitLog.map((commit, index) => (
                       <div
                         key={commit.hash}
-                        className="flex items-start gap-1.5 px-2.5 py-1 hover:bg-[#111111] transition-colors"
+                        className="flex items-start gap-3 px-4 py-2 hover:bg-[#111] transition-colors relative group"
                       >
-                        <div className="flex flex-col items-center pt-0.5">
-                          <span className={cn(
-                            'text-[6px]',
-                            commit.is_head ? 'text-[#4ade80]' : index === 0 ? 'text-[#6a9bcc]' : 'text-[#5b5b5b]'
-                          )}>
-                            ●
-                          </span>
+                        {/* Branch line */}
+                        {index < gitLog.length - 1 && (
+                          <div className="absolute left-[20px] top-4 bottom-[-8px] w-px bg-[#2a2a2a] group-hover:bg-[#3a3a3a] transition-colors z-0" />
+                        )}
+
+                        <div className="flex flex-col items-center pt-1 relative z-10">
+                          <div className={cn(
+                            'w-2 h-2 rounded-full border-[1.5px] bg-[#0a0a0a]',
+                            commit.is_head ? 'border-[#4ade80] shadow-[0_0_4px_rgba(74,222,128,0.5)]' : index === 0 ? 'border-[#6a9bcc]' : 'border-[#5b5b5b]'
+                          )} />
                         </div>
 
                         <div className="flex-1 min-w-0">
-                          <p className="text-[9px] text-[#c0c0c0] truncate font-mono">
+                          <p className="text-[10px] text-[#c0c0c0] truncate font-mono">
                             {commit.message}
                           </p>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className="text-[8px] text-[#6b6b6b] font-mono">
+                          <div className="flex items-center gap-2 mt-1 opacity-70">
+                            <span className="text-[9px] text-[#6b6b6b] font-mono font-semibold">
                               {commit.short_hash}
                             </span>
-                            <span className="text-[8px] text-[#5b5b5b]">
+                            <span className="text-[9px] text-[#5b5b5b] italic">
                               {commit.author}
                             </span>
                           </div>
@@ -818,6 +863,9 @@ export function ReviewPanel() {
           </AnimatePresence>
         </div>
       )}
+
+      </div>
+      {/* End scrollable sections container */}
 
     </motion.div>
   )

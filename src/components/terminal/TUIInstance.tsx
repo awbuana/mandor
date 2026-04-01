@@ -2,20 +2,24 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { spawn } from 'tauri-pty'
+import { invoke } from '@tauri-apps/api/core'
+import { useAppStore } from '@/stores/appStore'
 import '@xterm/xterm/css/xterm.css'
 
-interface TerminalViewProps {
+interface TuiViewProps {
   worktreePath: string
+  port: number
   isVisible: boolean
 }
 
-export function TerminalView({ worktreePath, isVisible }: TerminalViewProps) {
+export function TuiView({ worktreePath, port, isVisible }: TuiViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const ptyRef = useRef<ReturnType<typeof spawn> | null>(null)
-  // Track whether xterm has been opened into the DOM yet
   const openedRef = useRef(false)
+
+  const setOpencodeServer = useAppStore((s) => s.setOpencodeServer)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -54,19 +58,18 @@ export function TerminalView({ worktreePath, isVisible }: TerminalViewProps) {
     terminalRef.current = term
     fitAddonRef.current = fitAddon
 
-    // Use /bin/zsh as the default shell (macOS/Linux)
-    const shell = '/bin/zsh'
-
-    // Spawn PTY immediately so the process is ready when the terminal becomes visible
-    const pty = spawn(shell, [], {
+    // Spawn opencode TUI with a fixed port so we can reach its HTTP server
+    console.log('Spawning opencode TUI with port', port)
+    const pty = spawn('opencode', ['--port', String(port)], {
       cols: term.cols,
       rows: term.rows,
       cwd: worktreePath,
       env: {},
     })
+
     ptyRef.current = pty
 
-    // Bridge xterm input → PTY (registered before open so no events are lost)
+    // Bridge xterm input → PTY (registered before open so no keystrokes are lost)
     term.onData((data: string) => {
       pty.write(data)
     })
@@ -76,10 +79,6 @@ export function TerminalView({ worktreePath, isVisible }: TerminalViewProps) {
       term.writeln(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m`)
     })
 
-    // Only open + fit xterm once the container has real pixel dimensions.
-    // When mounted while hidden (display:none) offsetWidth/Height are 0 — calling
-    // fitAddon.fit() in that state crashes xterm's renderer (_renderer.value is
-    // undefined because no viewport dimensions exist yet).
     const tryOpen = () => {
       if (!containerRef.current || openedRef.current) return
       if (containerRef.current.offsetWidth === 0 || containerRef.current.offsetHeight === 0) return
@@ -87,20 +86,14 @@ export function TerminalView({ worktreePath, isVisible }: TerminalViewProps) {
       term.open(containerRef.current)
       openedRef.current = true
 
-      // Safe to fit now that the container has real dimensions
       fitAddon.fit()
       pty.resize(term.cols, term.rows)
 
-      // Bridge PTY output → xterm display (start after open so renderer exists)
       pty.onData((data: Uint8Array) => {
         term.write(data)
       })
     }
 
-    // ResizeObserver fires whenever the container gains/changes size — this covers:
-    // 1. Initial mount when already visible
-    // 2. The moment display:none → block flips (container goes from 0 to real size)
-    // 3. Panel resize events thereafter
     const resizeObserver = new ResizeObserver(() => {
       if (!containerRef.current) return
       if (containerRef.current.offsetWidth === 0 || containerRef.current.offsetHeight === 0) return
@@ -109,16 +102,28 @@ export function TerminalView({ worktreePath, isVisible }: TerminalViewProps) {
         tryOpen()
         return
       }
-
-      // Already opened — just re-fit
       fitAddon.fit()
       pty.resize(term.cols, term.rows)
     })
 
     resizeObserver.observe(containerRef.current)
-
-    // Attempt open immediately in case container is already visible
     tryOpen()
+
+    // Poll health endpoint then create a session — runs after PTY spawns
+    invoke<{ port: number; hostname: string; session_id: string }>(
+      'start_opencode_server',
+      { worktreePath, port, hostname: '127.0.0.1' }
+    ).then((info) => {
+      setOpencodeServer(worktreePath, {
+        isRunning: true,
+        port: info.port,
+        hostname: info.hostname,
+        sessionId: info.session_id,
+      })
+    })
+      .catch((err) => {
+        console.log(err)
+      })
 
     return () => {
       resizeObserver.disconnect()
@@ -129,11 +134,8 @@ export function TerminalView({ worktreePath, isVisible }: TerminalViewProps) {
       ptyRef.current = null
       openedRef.current = false
     }
-  }, [worktreePath])
+  }, [worktreePath, port])
 
-  // Re-fit when the tab becomes visible again (isVisible toggle)
-  // ResizeObserver already handles this via the 0→real size transition,
-  // but this is a safety net for cases where the container size doesn't change.
   useEffect(() => {
     if (!isVisible) return
     if (!openedRef.current || !fitAddonRef.current || !terminalRef.current) return
@@ -144,6 +146,23 @@ export function TerminalView({ worktreePath, isVisible }: TerminalViewProps) {
       ptyRef.current.resize(terminalRef.current.cols, terminalRef.current.rows)
     }, 50)
   }, [isVisible])
+
+  // useEffect(() => {
+  //   if (!isVisible) return
+  //   if (!openedRef.current || !fitAddonRef.current || !terminalRef.current) return
+
+  //   const rafId = requestAnimationFrame(() => {
+  //     if (!fitAddonRef.current || !terminalRef.current || !ptyRef.current) return
+  //     try {
+  //       fitAddonRef.current.fit()
+  //       ptyRef.current.resize(terminalRef.current.cols, terminalRef.current.rows)
+  //     } catch (_) {
+  //       // renderer not ready; ResizeObserver will handle it
+  //     }
+  //   })
+
+  //   return () => cancelAnimationFrame(rafId)
+  // }, [isVisible])
 
   return (
     <div

@@ -26,7 +26,7 @@ export function CreateWorktreeModal({ isOpen, onClose }: CreateWorktreeModalProp
   // Auto-generate worktree path when branch name changes
   useEffect(() => {
     if (branchName.trim()) {
-      const repoName = repoPath 
+      const repoName = repoPath
         ? repoPath.split('/').pop() || 'repo'
         : 'repo'
       const cleanBranch = branchName.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase()
@@ -48,19 +48,19 @@ export function CreateWorktreeModal({ isOpen, onClose }: CreateWorktreeModalProp
   const handleSubmit = async (e: React.FormEvent) => {
     // Prevent default form submission to avoid page reload
     e.preventDefault()
-    
+
     // Validate repository is loaded
     if (!repoPath) {
       setError('Please open a repository first')
       return
     }
-    
+
     // Validate inputs
     if (!branchName.trim()) {
       setError('Please enter a branch name')
       return
     }
-    
+
     if (!worktreePath.trim()) {
       setError('Please enter a worktree path')
       return
@@ -75,8 +75,13 @@ export function CreateWorktreeModal({ isOpen, onClose }: CreateWorktreeModalProp
         branch: branchName.trim(),
         path: worktreePath.trim()
       })
-      
+
       addWorktree(newWorktree as any)
+
+      // Register the new worktree with the filesystem watcher so changes are
+      // pushed to the frontend in real-time.
+      await invoke('add_watch_path', { path: (newWorktree as any).path }).catch(() => {})
+
       onClose()
     } catch (err) {
       console.error('Failed to create worktree:', err)
@@ -107,7 +112,7 @@ export function CreateWorktreeModal({ isOpen, onClose }: CreateWorktreeModalProp
             transition={{ duration: 0.1 }}
             className="fixed inset-0 flex items-center justify-center z-50"
           >
-            <div 
+            <div
               className="w-[480px] bg-[#0a0a0a] border border-[#1a1a1a] shadow-2xl font-mono"
               // Prevent clicks inside modal from bubbling up to backdrop and closing the modal
               onClick={(e) => e.stopPropagation()}

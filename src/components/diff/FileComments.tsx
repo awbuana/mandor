@@ -45,8 +45,8 @@ function CommentBubble({ comment, onResolve, onDelete }: {
           </span>
         )}
         <span className="text-[8px] font-mono text-[#3a3a3a] ml-auto">
-          {new Date(comment.timestamp).toLocaleDateString('en-GB', { 
-            day: '2-digit', 
+          {new Date(comment.timestamp).toLocaleDateString('en-GB', {
+            day: '2-digit',
             month: '2-digit'
           })}
         </span>

@@ -1,9 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod git;
-mod worktree;
-mod terminal;
 mod opencode;
+mod watcher;
+mod worktree;
 
 use tauri::Manager;
 
@@ -31,6 +31,8 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_pty::init())
+        .manage(watcher::WatcherState::new())
         .invoke_handler(tauri::generate_handler![
             open_app_window,
             git::list_worktrees,
@@ -40,27 +42,24 @@ fn main() {
             git::get_diff,
             git::get_diff_stats,
             git::stage_file,
+            git::stage_all_files,
             git::unstage_file,
+            git::unstage_all_files,
             git::discard_changes,
             git::commit,
+            git::git_push,
             git::get_branches,
             git::get_git_log,
             git::open_repository,
             worktree::open_in_editor,
             worktree::get_worktree_info,
-            terminal::spawn_terminal,
-            terminal::write_to_terminal,
-            terminal::resize_terminal,
-            terminal::kill_terminal,
+            watcher::start_file_watcher,
+            watcher::stop_file_watcher,
+            watcher::add_watch_path,
+            watcher::remove_watch_path,
             opencode::start_opencode_server,
-            opencode::send_opencode_message,
-            opencode::send_opencode_message_async,
-            opencode::reply_question,
-            opencode::list_session_messages,
-            opencode::stream_opencode_events,
-            opencode::check_opencode_health,
-            opencode::stop_opencode_server,
-            opencode::get_opencode_providers,
+            opencode::tui_append_prompt,
+            opencode::tui_submit_prompt,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

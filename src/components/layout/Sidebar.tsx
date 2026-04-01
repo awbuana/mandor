@@ -2,116 +2,34 @@ import { useAppStore } from '@/stores/appStore'
 import { Worktree } from '@/types'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Plus,
   Trash
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { CreateWorktreeModal } from '@/components/worktree/CreateWorktreeModal'
 import { invoke } from '@tauri-apps/api/core'
 
-interface DiffStats {
-  files_changed: number
-  insertions: number
-  deletions: number
-}
-
-// Ports Panel Component
-function PortsPanel() {
-  const { opencodeServers } = useAppStore()
-
-  // Get all running servers
-  const runningServers = Object.values(opencodeServers).filter(s => s.isRunning && s.port)
-
-  return (
-    <div className="border-t border-[#1a1a1a] font-mono">
-      <div className="px-3 py-2 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-[#6b6b6b]">[-]</span>
-          <span className="text-xs text-[#6b6b6b] uppercase tracking-wider">PORTS</span>
-        </div>
-        <span className="text-xs text-[#5b5b5b]">{runningServers.length}</span>
-      </div>
-
-      <div className="px-2 pb-2">
-        {runningServers.length > 0 ? (
-          <div className="space-y-0">
-            {runningServers.map((server) => (
-              <div
-                key={server.worktreePath}
-                className="flex items-center gap-2 px-3 py-1.5 hover:bg-[#111111]"
-              >
-                <span className="w-2 h-2 bg-[#4ade80]" />
-                <span className="text-xs text-[#9b9b9b]">
-                  {server.hostname}:{server.port}
-                </span>
-                <span className="text-xs text-[#6b6b6b] truncate flex-1">
-                  {server.worktreeName}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="px-3 py-2 text-xs text-[#5b5b5b]">
-            // no forwarded ports
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-interface DiffStats {
-  files_changed: number
-  insertions: number
-  deletions: number
-}
 
 export function Sidebar() {
-  const { worktrees, selectedWorktree, setSelectedWorktree, currentRepoPath, worktreeStatus, setWorktrees } = useAppStore()
+  const { worktrees, selectedWorktree, setSelectedWorktree, currentRepoPath, diffStats, setWorktrees } = useAppStore()
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [worktreeToDelete, setWorktreeToDelete] = useState<Worktree | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
-  const [diffStats, setDiffStats] = useState<Record<string, DiffStats>>({})
 
   const getBranchName = (worktree: Worktree) => {
     if (!worktree.branch) return 'detached HEAD'
     return worktree.branch.replace('refs/heads/', '')
   }
 
-  // Fetch diff stats for all worktrees
-  useEffect(() => {
-    const fetchDiffStats = async () => {
-      const stats: Record<string, DiffStats> = {}
-      
-      for (const worktree of worktrees) {
-        try {
-          const diffStat = await invoke('get_diff_stats', { 
-            worktreePath: worktree.path 
-          }) as DiffStats
-          stats[worktree.path] = diffStat
-        } catch (error) {
-          // If no changes or error, default to zero
-          stats[worktree.path] = { files_changed: 0, insertions: 0, deletions: 0 }
-        }
-      }
-      
-      setDiffStats(stats)
-    }
-    
-    if (worktrees.length > 0) {
-      fetchDiffStats()
-    }
-  }, [worktrees, worktreeStatus]) // Re-fetch when worktrees or status changes
 
   const getChangeCount = (worktree: Worktree) => {
     const stats = diffStats[worktree.path]
     if (!stats) return { added: 0, removed: 0, total: 0 }
-    
-    return { 
-      added: stats.insertions, 
-      removed: stats.deletions, 
-      total: stats.files_changed 
+
+    return {
+      added: stats.insertions,
+      removed: stats.deletions,
+      total: stats.files_changed
     }
   }
 
@@ -125,26 +43,29 @@ export function Sidebar() {
   // Handles the deletion of a worktree when confirmed by the user
   const handleDeleteWorktree = async () => {
     if (!worktreeToDelete) return
-    
+
     // Find the main repo path from worktrees
     const mainWorktree = worktrees.find(w => w.is_main)
     const repoPath = currentRepoPath || (mainWorktree ? mainWorktree.path : worktreeToDelete.path)
-    
+
     setIsDeleting(true)
     try {
+      // Remove from filesystem watcher before deleting
+      await invoke('remove_watch_path', { path: worktreeToDelete.path }).catch(() => {})
+
       await invoke('delete_worktree', {
         repoPath: repoPath,
         worktreePath: worktreeToDelete.path
       })
-      
+
       // Remove from list
       setWorktrees(worktrees.filter(w => w.path !== worktreeToDelete.path))
-      
+
       // If deleted worktree was selected, clear selection
       if (selectedWorktree?.path === worktreeToDelete.path) {
         setSelectedWorktree(null)
       }
-      
+
       setWorktreeToDelete(null)
     } catch (error) {
       console.error('Failed to delete worktree:', error)
@@ -159,40 +80,40 @@ export function Sidebar() {
         initial={{ x: -20, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         transition={{ duration: 0.3, delay: 0.1 }}
-        className="w-72 h-full bg-[#0a0a0a] border-r border-[#1a1a1a] flex flex-col"
+        className="w-72 h-full bg-[#0a0a0a] border-r border-[#1a1a1a] flex flex-col z-20"
       >
-        {/* Repository Header */}
-        <div className="px-3 py-2 flex items-center justify-between font-mono border-b border-[#1a1a1a]">
+        {/* Header */}
+        <div className="h-10 flex items-center justify-between px-3 py-2 bg-[#111111] border-b border-[#1a1a1a] font-mono">
           <div className="flex items-center gap-2">
-            <span className="text-xs text-[#6b6b6b]">[-]</span>
-            <span className="text-xs text-[#6b6b6b] uppercase tracking-wider">WORKTREES</span>
+            <span className="text-[#d97757]">▼</span>
+            <span className="text-xs text-[#6b6b6b] uppercase tracking-wider">worktrees</span>
+            <span className="text-[10px] text-[#d97757] bg-[#1a1a1a] px-1.5 rounded-sm border border-[#2a2a2a] ml-1">
+              {worktrees.length}
+            </span>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-[#5b5b5b]">{worktrees.length}</span>
-            <button 
-              onClick={handleCreateWorktreeClick}
-              className="p-1 hover:bg-[#1a1a1a] text-[#6b6b6b] hover:text-[#9b9b9b] transition-colors"
-              title={currentRepoPath ? "Create new worktree" : "Open repository first"}
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-          </div>
+          <button
+            onClick={handleCreateWorktreeClick}
+            className="text-[#6b6b6b] hover:text-[#9b9b9b] text-xs transition-colors"
+            title={currentRepoPath ? "Create new worktree" : "Open repository first"}
+          >
+            [+]
+          </button>
         </div>
 
         {/* Repository Info */}
-        <div className="px-3 py-2 font-mono">
-          <div className="flex items-center gap-2 text-xs">
-            <span className="text-[#4ade80]">➜</span>
-            <span className="text-[#9b9b9b]">{repoName}</span>
+        <div className="px-4 py-2.5 font-mono border-b border-[#1a1a1a] bg-[#0c0c0c]">
+          <div className="flex items-center gap-2 text-[10px]">
+            <span className="text-[#4ade80] opacity-80">➜</span>
+            <span className="text-[#9b9b9b] font-semibold tracking-tight">{repoName}</span>
           </div>
         </div>
 
       {/* Branch List */}
-      <div className="flex-1 overflow-auto px-2 font-mono">
-        <div className="space-y-0">
+      <div className="flex-1 overflow-auto bg-[#050505]">
+        <div className="space-y-[1px] py-1">
           {worktrees.length === 0 ? (
-            <div className="px-3 py-4 text-xs text-[#5b5b5b]">
-              // no worktrees found
+            <div className="px-5 py-3 text-[9px] text-[#5b5b5b] font-mono italic">
+              ~ empty
             </div>
           ) : (
             worktrees.map((worktree, index) => {
@@ -209,64 +130,65 @@ export function Sidebar() {
                 >
                   <div
                     className={cn(
-                      "group relative flex items-start justify-between px-3 py-2 transition-all",
+                      "group relative flex items-start justify-between px-3 py-2.5 mx-1.5 transition-all border border-transparent rounded-sm font-mono",
                       isSelected
-                        ? "bg-[#1a1a1a]"
-                        : "hover:bg-[#111111]"
+                        ? "bg-[#111] border-[#2a2a2a]"
+                        : "hover:bg-[#111] hover:border-[#1a1a1a]"
                     )}
                   >
+                    {/* Active Indicator Line */}
+                    {isSelected && (
+                      <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#d97757] rounded-l-sm" />
+                    )}
+
                     {/* Clickable content area */}
                     <div
                       onClick={() => setSelectedWorktree(worktree)}
-                      className="flex-1 min-w-0 cursor-pointer"
+                      className="flex-1 min-w-0 cursor-pointer pl-1"
                     >
                       {/* Branch Name with indicator */}
                       <div className="flex items-center gap-2">
-                        {isSelected && (
-                          <span className="text-[#d97757]">▸</span>
-                        )}
                         <span className={cn(
-                          "text-sm truncate",
-                          isSelected ? "text-[#e0e0e0]" : "text-[#9b9b9b]"
+                          "text-[11px] truncate font-mono tracking-tight transition-colors",
+                          isSelected ? "text-[#e0e0e0] font-semibold" : "text-[#9b9b9b] group-hover:text-[#c0c0c0]"
                         )}>
                           {branchName}
                         </span>
                         {worktree.is_main && (
-                          <span className="text-[10px] px-1 py-0.5 bg-[#1a1a1a] text-[#6b6b6b]">
+                          <span className="text-[8px] px-1 py-0.5 bg-[#1a1a1a] text-[#5b5b5b] border border-[#2a2a2a] rounded-[2px] uppercase">
                             main
                           </span>
                         )}
                       </div>
-                      
-                      {/* Commit Hash */}
-                      <div className="mt-0.5">
-                        <span className="text-xs text-[#5b5b5b]">
+
+                      {/* Commit Hash & Stats Row */}
+                      <div className="mt-1 flex items-center justify-between">
+                        <span className="text-[10px] text-[#6b6b6b] font-mono">
                           {worktree.head.slice(0, 7)}
                         </span>
+
+                        {/* Change Stats inline */}
+                        <div className="flex items-center gap-1.5 text-[9px] font-mono">
+                          {changes.added > 0 && (
+                            <span className="text-[#4ade80]/90">+{changes.added}</span>
+                          )}
+                          {changes.removed > 0 && (
+                            <span className="text-[#f87171]/90">-{changes.removed}</span>
+                          )}
+                        </div>
                       </div>
-                      
+
                       {/* Worktree Path */}
-                      <div className="mt-1" title={worktree.path}>
-                        <span className="text-[10px] text-[#4a4a4a] block overflow-hidden text-ellipsis whitespace-nowrap max-w-[200px]">
+                      <div className="mt-1 flex items-center gap-1.5 text-[9px] text-[#4a4a4a] italic" title={worktree.path}>
+                        <span className="text-[#3a3a3a] not-italic">└</span>
+                        <span className="block overflow-hidden text-ellipsis whitespace-nowrap">
                           {worktree.path.replace(/^\/Users\/[^/]+/, '~')}
                         </span>
                       </div>
                     </div>
 
                     {/* Action buttons - separate from clickable area */}
-                    <div className="flex items-center gap-2 ml-2">
-                      {/* Change Stats */}
-                      {(changes.added > 0 || changes.removed > 0) && (
-                        <div className="flex items-center gap-1 text-xs">
-                          {changes.added > 0 && (
-                            <span className="text-[#4ade80]">+{changes.added}</span>
-                          )}
-                          {changes.removed > 0 && (
-                            <span className="text-[#f87171]">-{changes.removed}</span>
-                          )}
-                        </div>
-                      )}
-                      
+                    <div className="flex flex-col items-end gap-1 ml-2">
                       {/* Delete Button - Only show on hover and for non-main worktrees */}
                       {!worktree.is_main && (
                         <button
@@ -274,7 +196,7 @@ export function Sidebar() {
                             e.stopPropagation()
                             setWorktreeToDelete(worktree)
                           }}
-                          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#f87171]/20 text-[#6b6b6b] hover:text-[#f87171] transition-all"
+                          className="opacity-0 group-hover:opacity-100 p-1 bg-[#111] hover:bg-[#f87171]/20 text-[#6b6b6b] hover:text-[#f87171] border border-transparent hover:border-[#f87171]/30 transition-all rounded-sm z-10"
                           title="Delete worktree"
                         >
                           <Trash className="w-3.5 h-3.5" />
@@ -289,14 +211,12 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* Ports Section */}
-      <PortsPanel />
       </motion.aside>
 
       {/* Create Worktree Modal */}
-      <CreateWorktreeModal 
-        isOpen={isCreateModalOpen} 
-        onClose={() => setIsCreateModalOpen(false)} 
+      <CreateWorktreeModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
       />
 
       {/* Delete Confirmation Modal */}
@@ -320,7 +240,7 @@ export function Sidebar() {
               transition={{ duration: 0.1 }}
               className="fixed inset-0 flex items-center justify-center z-50"
             >
-              <div 
+              <div
                 className="w-96 bg-[#0a0a0a] border border-[#1a1a1a] shadow-2xl font-mono"
                 onClick={(e) => e.stopPropagation()}
               >

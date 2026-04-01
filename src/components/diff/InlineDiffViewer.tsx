@@ -55,8 +55,8 @@ function CommentBubble({ comment, onResolve, onDelete }: CommentBubbleProps) {
           :{comment.lineNumber}
         </span>
         <span className="text-[8px] font-mono text-[#3a3a3a] ml-auto">
-          {new Date(comment.timestamp).toLocaleDateString('en-GB', { 
-            day: '2-digit', 
+          {new Date(comment.timestamp).toLocaleDateString('en-GB', {
+            day: '2-digit',
             month: '2-digit'
           })}
         </span>
@@ -170,7 +170,7 @@ export function InlineDiffViewer({
   onDeleteComment,
 }: InlineDiffViewerProps) {
   const [hoveredLine, setHoveredLine] = useState<number | null>(null)
-  const [activeCommentLine, setActiveCommentLine] = useState<number | null>(null)
+  const [activeCommentIndex, setActiveCommentIndex] = useState<number | null>(null)
 
   const getCommentsForLine = (lineNumber: number) => {
     return comments.filter((c) => c.lineNumber === lineNumber && !c.resolved)
@@ -178,20 +178,20 @@ export function InlineDiffViewer({
 
   const handleAddComment = (lineNumber: number, content: string) => {
     onAddComment(lineNumber, content)
-    setActiveCommentLine(null)
+    setActiveCommentIndex(null)
   }
 
   return (
     <div className="bg-[#0a0a0a] h-full overflow-auto">
-      <div 
+      <div
         className="min-w-full font-mono transition-all duration-200"
         style={{ fontSize: `${zoom}%` }}
       >
           {diffContent.map((line, index) => {
             const isHeader = line.type === 'header'
-            const lineNumber = line.newLine || line.oldLine || index
-            const lineComments = isHeader ? [] : getCommentsForLine(lineNumber)
-            const isAddingComment = activeCommentLine === lineNumber
+            const lineNumber = line.newLine ?? line.oldLine ?? index
+            const lineComments = isHeader || line.newLine == null ? [] : getCommentsForLine(lineNumber)
+            const isAddingComment = activeCommentIndex === index
             const isHovered = hoveredLine === index && !isHeader
             const showComments = lineComments.length > 0 || isAddingComment
 
@@ -226,11 +226,11 @@ export function InlineDiffViewer({
                     )}
                     {isHeader && <span className="px-2 text-[#9b9b9b]">...</span>}
 
-                    {!isHeader && (
+                    {!isHeader && line.newLine != null && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
-                          setActiveCommentLine(lineNumber)
+                          setActiveCommentIndex(index)
                         }}
                         className={cn(
                           'absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center text-[#d97757] hover:text-[#f99777] cursor-pointer transition-opacity font-mono text-[10px]',
@@ -282,7 +282,7 @@ export function InlineDiffViewer({
                       {isAddingComment && (
                         <InlineCommentInput
                           onSubmit={(content) => handleAddComment(lineNumber, content)}
-                          onCancel={() => setActiveCommentLine(null)}
+                          onCancel={() => setActiveCommentIndex(null)}
                         />
                       )}
                     </div>
